@@ -23,8 +23,8 @@ SITE_URL = os.environ.get("SITE_URL", "https://thenewhealthclubs.com")
 # --- Sources ---
 # Run discover_feeds.py once to verify/correct these URLs, then update here.
 FEEDS = {
-    "HCM (Health Club Management)": "https://www.healthclubmanagement.co.uk/rss",
-    "Spa Business": "https://www.spabusiness.com/rss",
+    "HCM (Health Club Management)": "https://www.leisureopportunities.co.uk/rss/rss_news.cfm?section=HAF",
+    "Spa Business": "https://www.leisureopportunities.co.uk/rss/rss_news.cfm?section=SPA",
     "Athletech News": "https://athletechnews.com/feed/",
     "American Spa": "https://www.americanspa.com/rss.xml",
     "Welltodo": "https://www.welltodoglobal.com/feed/",
