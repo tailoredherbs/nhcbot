@@ -7,12 +7,12 @@ from editorial import CRITERIA, OUTPUT_SPEC
 
 log = logging.getLogger("filter")
 
-def _call_llm(system: str, user: str) -> str:
+def _call_llm(system: str, user: str, max_tokens: int = 1200) -> str:
     if ANTHROPIC_API_KEY:
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": ANTHROPIC_MODEL, "max_tokens": 1200, "system": system,
+            json={"model": ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": system,
                   "messages": [{"role": "user", "content": user}]}, timeout=90)
         r.raise_for_status()
         return "".join(b.get("text", "") for b in r.json()["content"])

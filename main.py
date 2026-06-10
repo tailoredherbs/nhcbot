@@ -5,13 +5,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-import store, sources, filter_llm, publisher, socials
+import store, sources, filter_llm, publisher, socials, reports_gen
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("main")
 AWAITING_EDIT: dict[int, int] = {}  # chat_id -> item_id
+PENDING_REPORT: dict[int, dict] = {}  # chat_id -> drafted report
 
 
 # ---------- jobs ----------
@@ -74,11 +75,13 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     action, item_id = q.data.split(":")
     item_id = int(item_id)
-    item = store.get(item_id)
-    if not item:
-        await q.edit_message_text("Item not found.")
-        return
-    llm = json.loads(item["llm"])
+    item, llm = None, None
+    if action not in ("repub", "redraft", "rediscard"):
+        item = store.get(item_id)
+        if not item:
+            await q.edit_message_text("Item not found.")
+            return
+        llm = json.loads(item["llm"])
 
     if action == "skip":
         store.set_status(item_id, "skipped")
@@ -117,6 +120,39 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML", reply_markup=_card_kb(item_id), disable_web_page_preview=True)
         else:
             await context.bot.send_message(q.message.chat_id, "Rescue failed — try again or check logs.")
+
+    elif action in ("repub", "redraft", "rediscard"):
+        r = PENDING_REPORT.get(q.message.chat_id)
+        if not r:
+            await q.edit_message_text("No pending report draft — run /report again.")
+            return
+        if action == "rediscard":
+            PENDING_REPORT.pop(q.message.chat_id, None)
+            await q.edit_message_text("❌ Report draft discarded.")
+        elif action == "redraft":
+            await q.edit_message_text("🔄 Redrafting with a different angle…")
+            r2 = reports_gen.draft()
+            if r2 and not r2.get("error"):
+                PENDING_REPORT[q.message.chat_id] = r2
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Publish report", callback_data="repub:0"),
+                    InlineKeyboardButton("🔄 Redraft", callback_data="redraft:0"),
+                    InlineKeyboardButton("❌ Discard", callback_data="rediscard:0"),
+                ]])
+                await context.bot.send_message(q.message.chat_id,
+                    f"<b>{r2['title']}</b>\n\n{r2.get('description','')}\n\n{r2.get('body','')[:600]}…",
+                    parse_mode="HTML", reply_markup=kb)
+            else:
+                await context.bot.send_message(q.message.chat_id, "Redraft failed.")
+        else:
+            try:
+                path = reports_gen.publish(r)
+                PENDING_REPORT.pop(q.message.chat_id, None)
+                await q.edit_message_text(f"✅ Report published: {r['title']}\n→ {path}\n"
+                    "Tip: open /admin to add a header image and polish wording.")
+            except Exception as ex:
+                await q.edit_message_text(f"⚠️ Report publish failed: {ex}")
+        return
 
     elif action == "edit":
         AWAITING_EDIT[q.message.chat_id] = item_id
@@ -177,6 +213,39 @@ async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
 
 
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    days = None
+    if context.args:
+        try:
+            days = int(context.args[0])
+        except ValueError:
+            pass
+    await update.message.reply_text("🗞 Synthesizing signals into a report draft…")
+    r = reports_gen.draft(days)
+    if not r:
+        await update.message.reply_text("Draft failed — check logs.")
+        return
+    if r.get("error"):
+        await update.message.reply_text(r["error"])
+        return
+    PENDING_REPORT[chat_id] = r
+    md = reports_gen.report_markdown(r)
+    import io as _io
+    await context.bot.send_document(chat_id, document=_io.BytesIO(md.encode()),
+        filename="report-draft.md")
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Publish report", callback_data="repub:0"),
+        InlineKeyboardButton("🔄 Redraft", callback_data="redraft:0"),
+        InlineKeyboardButton("❌ Discard", callback_data="rediscard:0"),
+    ]])
+    await update.message.reply_text(
+        f"<b>{r['title']}</b>\n<i>from {r['n_signals']} signals since {r['since']}</i>\n\n"
+        f"{r.get('description','')}\n\n"
+        f"{r.get('body','')[:600]}…",
+        parse_mode="HTML", reply_markup=kb)
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = store.counts()
     await update.message.reply_text(
@@ -191,6 +260,7 @@ def main():
     app.add_handler(CommandHandler("fetch", cmd_fetch))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("rejected", cmd_rejected))
+    app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     tz = zoneinfo.ZoneInfo(TZ)
