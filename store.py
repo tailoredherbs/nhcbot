@@ -59,3 +59,8 @@ def counts():
     with _conn() as c:
         return {r["status"]: r["n"] for r in c.execute(
             "SELECT status, COUNT(*) n FROM items GROUP BY status")}
+
+def rejected_recent(limit=15):
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM items WHERE status='rejected' ORDER BY id DESC LIMIT ?", (limit,))]

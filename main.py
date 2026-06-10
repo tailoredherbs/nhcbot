@@ -92,6 +92,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as ex:
             await q.edit_message_text(f"⚠️ Publish failed: {ex}\nItem kept as pending.")
 
+    elif action == "rescue":
+        await q.edit_message_text(f"♻️ Rescuing: {item['title'][:80]}… drafting signal.")
+        new_llm = filter_llm.revise(item, "The editor has overridden the rejection. Set include=true and produce the complete signal draft with all fields, based on the source summary.")
+        if new_llm and new_llm.get("title"):
+            store.set_llm(item_id, new_llm, "pending")
+            await context.bot.send_message(q.message.chat_id, _card_text(store.get(item_id), new_llm),
+                parse_mode="HTML", reply_markup=_card_kb(item_id), disable_web_page_preview=True)
+        else:
+            await context.bot.send_message(q.message.chat_id, "Rescue failed — try again or check logs.")
+
     elif action == "edit":
         AWAITING_EDIT[q.message.chat_id] = item_id
         await q.message.reply_text(
@@ -132,6 +142,25 @@ async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = store.counts()
     await update.message.reply_text(f"Done. Pending: {c.get('pending', 0)}")
 
+async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = store.rejected_recent(15)
+    if not items:
+        await update.message.reply_text("No rejected items yet.")
+        return
+    await update.message.reply_text(f"🗑 Last {len(items)} rejected — tap ♻️ to override:")
+    for item in items:
+        try:
+            llm = json.loads(item["llm"]) if item["llm"] else {}
+        except Exception:
+            llm = {}
+        reason = llm.get("reason", "no reason stored")
+        ring = llm.get("ring", "?")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("♻️ Rescue", callback_data=f"rescue:{item['id']}")]])
+        await update.message.reply_text(
+            f"<b>{item['title'][:120]}</b>\n<i>{item['source']} · Ring {ring}</i>\n{reason}\n{item['url']}",
+            parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = store.counts()
     await update.message.reply_text(
@@ -145,6 +174,7 @@ def main():
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("rejected", cmd_rejected))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     tz = zoneinfo.ZoneInfo(TZ)
