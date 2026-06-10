@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-import store, sources, filter_llm, publisher
+import store, sources, filter_llm, publisher, socials
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST)
 
@@ -88,9 +88,25 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             path = publisher.publish(llm, item["url"])
             store.set_status(item_id, "published")
-            await q.edit_message_text(f"✅ Published: {llm['title']}\n→ {path}\nNetlify is deploying.")
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Social pack", callback_data=f"social:{item_id}")]])
+            await q.edit_message_text(f"✅ Published: {llm['title']}\n→ {path}\nNetlify is deploying.", reply_markup=kb)
         except Exception as ex:
             await q.edit_message_text(f"⚠️ Publish failed: {ex}\nItem kept as pending.")
+
+    elif action == "social":
+        await context.bot.send_message(q.message.chat_id, "📣 Building social pack…")
+        try:
+            ctx = socials.signal_context(llm)
+            png = socials.render_card(llm, number=ctx["number"], coords=ctx["coords"])
+            caps = socials.captions(llm) or {}
+            ig = caps.get("instagram", "")
+            li = caps.get("linkedin", "")
+            await context.bot.send_photo(q.message.chat_id, photo=png,
+                caption=("📸 Instagram\n\n" + ig)[:1024])
+            if li:
+                await context.bot.send_message(q.message.chat_id, "💼 LinkedIn\n\n" + li)
+        except Exception as ex:
+            await context.bot.send_message(q.message.chat_id, f"Social pack failed: {ex}")
 
     elif action == "rescue":
         await q.edit_message_text(f"♻️ Rescuing: {item['title'][:80]}… drafting signal.")
