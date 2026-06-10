@@ -7,7 +7,7 @@ from config import FEEDS, SITE_URL
 import store
 
 log = logging.getLogger("sources")
-UA = {"User-Agent": "Mozilla/5.0 (NHC-Pipeline; +https://thenewhealthclubs.com)"}
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
 
 def _clean(html: str, limit=1200) -> str:
     text = re.sub(r"<[^>]+>", " ", html or "")
