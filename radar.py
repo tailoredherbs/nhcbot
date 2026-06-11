@@ -73,9 +73,9 @@ def _clean(html, limit=900):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()[:limit]
 
 
-def fetch_and_filter() -> int:
-    """Pull radar feeds, filter, store. Returns number of new pending items."""
-    kept = 0
+def fetch_and_filter() -> dict:
+    """Pull radar feeds, filter, store. Returns counts for diagnostics."""
+    stats = {"scanned": 0, "kept": 0, "excluded": 0, "errors": 0, "feed_fail": 0}
     for source, url in RADAR_FEEDS.items():
         try:
             feed = feedparser.parse(requests.get(url, headers=UA, timeout=30).content)
@@ -88,6 +88,7 @@ def fetch_and_filter() -> int:
                 with _conn() as c:
                     if c.execute("SELECT 1 FROM radar_items WHERE url_hash=?", (h,)).fetchone():
                         continue
+                stats["scanned"] += 1
                 summary = _clean(getattr(e, "summary", "") or getattr(e, "description", ""))
                 try:
                     verdict = _parse(_call_llm(RADAR_BRIEF,
@@ -95,9 +96,11 @@ def fetch_and_filter() -> int:
                         max_tokens=400, temperature=0.2))
                 except Exception as ex:
                     log.error("Radar filter failed (will retry next run): %s", ex)
+                    stats["errors"] += 1
                     continue  # do NOT store — item stays unseen and retries next scan
                 if verdict is None:
                     log.warning("Radar verdict unparseable for: %s", title[:60])
+                    stats["errors"] += 1
                     continue
                 import time as _t; _t.sleep(0.6)  # be gentle with API rate limits
                 status = "pending" if verdict.get("include") else "excluded"
@@ -109,12 +112,13 @@ def fetch_and_filter() -> int:
                          (verdict or {}).get("headline", title),
                          (verdict or {}).get("detail") or (verdict or {}).get("why_it_matters", ""),
                          status, int(time.time())))
-                if status == "pending":
-                    kept += 1
+                stats["kept" if status == "pending" else "excluded"] += 1
             log.info("Radar %s: ok", source)
         except Exception as ex:
             log.error("Radar feed failed %s: %s", source, ex)
-    return kept
+            stats["feed_fail"] += 1
+    log.info("Radar scan done: %s", stats)
+    return stats
 
 
 def pending(limit=20):
