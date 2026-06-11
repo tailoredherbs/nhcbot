@@ -73,14 +73,18 @@ def fetch_and_filter() -> int:
                     if c.execute("SELECT 1 FROM radar_items WHERE url_hash=?", (h,)).fetchone():
                         continue
                 summary = _clean(getattr(e, "summary", "") or getattr(e, "description", ""))
-                verdict = None
                 try:
                     verdict = _parse(_call_llm(RADAR_BRIEF,
                         f"Source: {source}\nTitle: {title}\nSummary: {summary}",
                         max_tokens=400, temperature=0.2))
                 except Exception as ex:
-                    log.error("Radar filter failed: %s", ex)
-                status = "pending" if (verdict and verdict.get("include")) else "excluded"
+                    log.error("Radar filter failed (will retry next run): %s", ex)
+                    continue  # do NOT store — item stays unseen and retries next scan
+                if verdict is None:
+                    log.warning("Radar verdict unparseable for: %s", title[:60])
+                    continue
+                import time as _t; _t.sleep(0.6)  # be gentle with API rate limits
+                status = "pending" if verdict.get("include") else "excluded"
                 with _conn() as c:
                     c.execute("""INSERT INTO radar_items
                         (url_hash, source, title, url, headline, why, status, created_at)
