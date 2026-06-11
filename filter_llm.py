@@ -14,7 +14,8 @@ def _call_llm(system: str, user: str, max_tokens: int = 1200, temperature: float
                      "content-type": "application/json"},
             json={"model": ANTHROPIC_MODEL, "max_tokens": max_tokens, "temperature": temperature, "system": system,
                   "messages": [{"role": "user", "content": user}]}, timeout=90)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise RuntimeError(f"Anthropic API {r.status_code}: {r.text[:300]}")
         return "".join(b.get("text", "") for b in r.json()["content"])
     if OPENAI_API_KEY:
         r = requests.post("https://api.openai.com/v1/chat/completions",
@@ -22,7 +23,8 @@ def _call_llm(system: str, user: str, max_tokens: int = 1200, temperature: float
             json={"model": OPENAI_MODEL, "temperature": temperature,
                   "messages": [{"role": "system", "content": system},
                                {"role": "user", "content": user}]}, timeout=90)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise RuntimeError(f"OpenAI API {r.status_code}: {r.text[:300]}")
         return r.json()["choices"][0]["message"]["content"]
     raise RuntimeError("Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
 
