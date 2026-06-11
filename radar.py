@@ -61,6 +61,14 @@ def init():
             created_at INTEGER)""")
 
 
+def reset() -> int:
+    """Wipe all radar items so the next scan re-fetches and re-filters everything."""
+    with _conn() as c:
+        n = c.execute("SELECT COUNT(*) FROM radar_items").fetchone()[0]
+        c.execute("DELETE FROM radar_items")
+    return n
+
+
 def _clean(html, limit=900):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()[:limit]
 
