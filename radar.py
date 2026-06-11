@@ -35,12 +35,20 @@ INCLUDE only items a high-end wellness concierge should know about:
 EXCLUDE: mouse/cell-only incremental studies, supplement marketing, lifestyle listicles,
 routine biotech funding, opinion pieces without new facts.
 
-For included items, write why_it_matters in ONE sentence aimed at the desk: what a
-client might ask about, or what changes for venues.
+For included items, write "detail": 1-2 sentences of CONCRETE SUBSTANCE pulled from the
+item itself — the specific finding, numbers, names, location, ruling, or outcome. What
+actually happened, with the facts that make it useful. NEVER write generic relevance
+statements like "clients may ask about safety" — the reader already knows why it is
+relevant; he needs the substance so he can speak about it without opening the link.
+
+Bad:  "Clients may inquire about safety and legal risks of psychedelic retreats."
+Good: "Peruvian facilitator charged with negligent homicide after a 34-year-old US
+client died from combined kambo and ayahuasca at an Iquitos retreat; the venue had
+no medical screening protocol."
 
 Respond ONLY with JSON, no fences:
 {"include": true/false, "headline": "plain restatement, max 14 words",
- "why_it_matters": "one sentence"}"""
+ "detail": "1-2 sentences of concrete substance"}"""
 
 
 def init():
@@ -91,7 +99,7 @@ def fetch_and_filter() -> int:
                         VALUES (?,?,?,?,?,?,?,?)""",
                         (h, source, title, link,
                          (verdict or {}).get("headline", title),
-                         (verdict or {}).get("why_it_matters", ""),
+                         (verdict or {}).get("detail") or (verdict or {}).get("why_it_matters", ""),
                          status, int(time.time())))
                 if status == "pending":
                     kept += 1
