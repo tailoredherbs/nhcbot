@@ -361,6 +361,13 @@ async def cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_radar(update.message.chat_id, context)
 
 
+async def cmd_radarreset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n = radar.reset()
+    await update.message.reply_text(
+        f"🛰 Radar memory cleared ({n} items). Run /radar to re-scan everything "
+        "with the current filter — first run will take a few minutes.")
+
+
 async def cmd_compile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seeds = [s for s in store.saved_insights(50) if s["title"].startswith("🌱")]
     if len(seeds) < 2:
@@ -492,6 +499,7 @@ def main():
     app.add_handler(CommandHandler("capture", cmd_capture))
     app.add_handler(CommandHandler("compile", cmd_compile))
     app.add_handler(CommandHandler("radar", cmd_radar))
+    app.add_handler(CommandHandler("radarreset", cmd_radarreset))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("ideas", cmd_ideas))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
