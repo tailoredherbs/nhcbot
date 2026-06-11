@@ -27,12 +27,16 @@ EXTRACT_BRIEF = """You analyze a spoken work-ramble from the founder of a wellne
 field-intelligence platform. Identify the 1-3 DISTINCT post-worthy insights.
 
 An insight = ONE specific, arguable observation about the premium wellness category
-(longevity clinics, retreats, social wellness clubs, practitioners). Not a plan, not a
-to-do, not generic advice. Keep insights strictly separate — never merge two points
-that happen to be adjacent in the ramble.
+(longevity clinics, retreats, social wellness clubs, practitioners) — something about
+how the WORLD is, that a reader could disagree with. STRICTLY EXCLUDED: his plans and
+intentions ("I want to...", "the site should..."), to-dos, and business strategy —
+those are not insights. Keep insights strictly separate — never merge two points that
+happen to be adjacent in the ramble. If two candidate insights substantially overlap,
+keep only the stronger one.
 
-For each insight collect his raw material: the verbatim phrases, numbers, and examples
-from the transcript that carry it.
+For each insight collect his raw material GENEROUSLY: every verbatim sentence and
+phrase from the transcript that touches it, in original order, including the rough
+ones — 6-15 items. The next stage can only use what you collect.
 
 If nothing qualifies, return an empty list.
 
@@ -41,34 +45,29 @@ Respond ONLY with JSON, no fences:
   "point": "the single claim, one sentence, in plain words",
   "material": ["verbatim phrase 1", "verbatim phrase 2", "..."]}]}"""
 
-WRITE_BRIEF = """You ghost-write a LinkedIn post for Jakob, founder of The New Health
-Club (field intelligence on premium wellness spaces) and New Health Access (private
-placement desk). Psychology background, Chinese medicine, contemplative training.
+SECRETARY_BRIEF = """You are a respectful secretary, not a ghost-writer. You turn one
+insight from Jakob's spoken ramble into a LinkedIn post using HIS OWN WORDS.
 
-""" + VOICE_RULES + """
-{samples}
-TASK: Write ONE post developing ONLY the single insight given. 150-280 words, short
-paragraphs separated by blank lines. Open with the observation itself. Develop it
-through his raw material — reuse his verbatim phrases where they are strong. Close on
-what it means, plainly. Do not import any other point.
+THE METHOD — follow exactly:
+1. Take the verbatim material provided. These are his actual sentences.
+2. Select the sentences that carry the single insight given. Discard the rest.
+3. Clean only: remove filler words (like, right, you know, kind of, basically, I mean),
+   false starts, and exact repetitions. Expand obvious fragments minimally so they
+   parse. Remove contractions (it's -> it is). Fix nothing else.
+4. Arrange into a post: 100-250 words, short paragraphs separated by blank lines.
+   You may add AT MOST two short connective phrases of your own (e.g. "And yet.",
+   "That is the gap."). Nothing else may be invented — no new examples, no new claims,
+   no vocabulary that is not his.
+5. If his material ends without a conclusion, end the post where his thought ends.
+   Do not write a closing summary for him.
 
-Also select the post's single strongest line as a pull quote (max 16 words, from the
-post text, light trimming allowed).
+The result should sound like a person thinking, not like content. Rough is correct.
 
-Respond ONLY with JSON, no fences:
-{{"post": "the full post text", "pull_quote": "strongest line"}}"""
-
-DESLOP_BRIEF = """You are a ruthless editor. The text below is a LinkedIn post draft.
-Rewrite it with one goal: remove everything that could appear in a generic AI-written
-LinkedIn post. Specifically delete or rewrite: abstract filler ("comprehensive",
-"crucial", "diverse", "landscape", "richer experience", "broader offering", "it is
-important"), balanced both-sides hedging that says nothing, and any closing paragraph
-that merely restates the post. Keep: the concrete observations, numbers, personal
-experience, the author's verbatim phrasings, the declarative no-contractions style.
-The result should be shorter or equal in length, never longer. Do not add new ideas.
+Also select the single strongest line as a pull quote (max 16 words, verbatim from
+the post).
 
 Respond ONLY with JSON, no fences:
-{"post": "the edited post", "pull_quote": "strongest line, max 16 words"}"""
+{"post": "the assembled post", "pull_quote": "strongest line"}"""
 
 
 def transcribe(audio: bytes, filename: str = "voice.oga") -> str | None:
@@ -95,26 +94,17 @@ def extract_posts(transcript: str) -> list[dict]:
         log.error("Extraction failed: %s", ex)
         return []
 
-    samples = ""
-    if WRITING_SAMPLES.strip():
-        samples = ("EXAMPLES OF HIS ACTUAL PUBLISHED WRITING — match this voice "
-                   "exactly:\n" + WRITING_SAMPLES.strip() + "\n\n")
     posts = []
     for ins in insights[:3]:
         user = (f"THE INSIGHT: {ins.get('point','')}\n\n"
-                f"HIS RAW MATERIAL:\n- " + "\n- ".join(ins.get("material", [])))
+                f"HIS VERBATIM MATERIAL:\n- " + "\n- ".join(ins.get("material", [])))
         try:
-            draft = _parse(_call_llm(WRITE_BRIEF.format(samples=samples), user,
-                                     max_tokens=1500, temperature=0.8))
-            if not draft or not draft.get("post"):
-                continue
-            final = _parse(_call_llm(DESLOP_BRIEF, draft["post"],
-                                     max_tokens=1500, temperature=0.4))
-            if final and final.get("post"):
-                draft = final
-            posts.append({"title": ins.get("label", ""),
-                          "post": draft.get("post", ""),
-                          "pull_quote": draft.get("pull_quote", "")})
+            draft = _parse(_call_llm(SECRETARY_BRIEF, user,
+                                     max_tokens=1500, temperature=0.3))
+            if draft and draft.get("post"):
+                posts.append({"title": ins.get("label", ""),
+                              "post": draft.get("post", ""),
+                              "pull_quote": draft.get("pull_quote", "")})
         except Exception as ex:
-            log.error("Write/deslop failed for '%s': %s", ins.get("label"), ex)
+            log.error("Assembly failed for '%s': %s", ins.get("label"), ex)
     return posts
