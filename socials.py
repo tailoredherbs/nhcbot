@@ -125,6 +125,53 @@ def render_card(llm: dict, number: int | None = None, coords: tuple | None = Non
     return buf.getvalue()
 
 
+def render_note_card(pull_quote: str) -> bytes:
+    """Pull-quote card for POV posts — sibling of the signal card."""
+    img = Image.new("RGB", (W, H), CREAM)
+    d = ImageDraw.Draw(img)
+    inner = W - 2 * MARGIN
+
+    y = 110
+    _tracked(d, (MARGIN, y), "THE NEW HEALTH CLUB", _sans(26, 600), INK, tracking=8)
+    y += 56
+    d.line([(MARGIN, y), (W - MARGIN, y)], fill=INK, width=3)
+    y += 44
+    d.rectangle([MARGIN, y + 6, MARGIN + 14, y + 20], fill=INK)
+    _tracked(d, (MARGIN + 32, y), "FIELD NOTE", _sans(24, 500), GRAY, tracking=5)
+
+    label_bottom = y + 40
+    footer_top = H - 210
+    avail = footer_top - label_bottom - 60
+
+    quote = "\u201c" + pull_quote.strip().rstrip(".") + ".\u201d"
+    size = 104
+    while size > 56:
+        font = _serif(size, 520)
+        lines = _wrap(d, quote, font, inner)
+        line_h = int(size * 1.22)
+        if len(lines) * line_h <= avail:
+            break
+        size -= 6
+    content_h = len(lines) * line_h
+    y = label_bottom + max(56, int((avail - content_h) * 0.42))
+    for ln in lines:
+        d.text((MARGIN, y), ln, font=font, fill=INK)
+        y += line_h
+
+    fy = H - 210
+    d.line([(MARGIN, fy), (W - MARGIN, fy)], fill=LINE, width=2)
+    fy += 36
+    date = datetime.date.today().strftime("%d %B %Y").upper()
+    _tracked(d, (MARGIN, fy), "JAKOB \u00b7 NEW HEALTH ACCESS  \u2014  " + date,
+             _sans(23, 500), GRAY, tracking=4)
+    fy += 58
+    _tracked(d, (MARGIN, fy), "THENEWHEALTHCLUBS.COM", _sans(22, 600), INK, tracking=6)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 CAPTION_PROMPT = """You write social posts for The New Health Club — a field-intelligence
 platform mapping premium wellness spaces (longevity sanctuaries, clinics, retreats, clubs).
 Voice: field intelligence. Factual, specific, operator-literate. No hype adjectives,

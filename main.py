@@ -250,6 +250,12 @@ async def _run_capture(transcript: str, chat_id, context):
     await context.bot.send_message(chat_id, f"💡 {len(posts)} draft(s) from your ramble:")
     for p in posts:
         iid = store.add_insight(p.get("title", ""), p.get("post", ""), transcript[:4000])
+        pq = (p.get("pull_quote") or "").strip()
+        if pq:
+            try:
+                await context.bot.send_photo(chat_id, photo=socials.render_note_card(pq))
+            except Exception as ex:
+                logging.getLogger("main").error("Note card failed: %s", ex)
         await context.bot.send_message(chat_id,
             f"<b>{p.get('title','')}</b>\n\n{p.get('post','')}",
             parse_mode="HTML", reply_markup=_insight_kb(iid))
