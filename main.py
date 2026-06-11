@@ -17,15 +17,16 @@ PENDING_REPORT: dict[int, dict] = {}  # chat_id -> drafted report
 
 # ---------- jobs ----------
 async def job_fetch_and_filter(context: ContextTypes.DEFAULT_TYPE):
-    new_ids = sources.fetch_feeds()
+    import asyncio
+    new_ids = await asyncio.to_thread(sources.fetch_feeds)
     if not new_ids:
         log.info("Fetch: nothing new")
         return
-    venues = sources.load_index_venues()
+    venues = await asyncio.to_thread(sources.load_index_venues)
     accepted = 0
     for item_id in new_ids:
         item = store.get(item_id)
-        llm = filter_llm.assess(item, venues)
+        llm = await asyncio.to_thread(filter_llm.assess, item, venues)
         if not llm:
             store.set_status(item_id, "rejected")
             continue
@@ -332,13 +333,17 @@ async def _send_radar(chat_id, context):
 
 
 async def job_radar(context: ContextTypes.DEFAULT_TYPE):
-    radar.fetch_and_filter()
+    import asyncio
+    await asyncio.to_thread(radar.fetch_and_filter)
     await _send_radar(TELEGRAM_CHAT_ID, context)
 
 
 async def cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🛰 Scanning radar feeds…")
-    n = radar.fetch_and_filter()
+    import asyncio
+    await update.message.reply_text(
+        "🛰 Scanning radar feeds… first run can take several minutes (backlog); "
+        "after that it is quick. The digest arrives when done.")
+    await asyncio.to_thread(radar.fetch_and_filter)
     await _send_radar(update.message.chat_id, context)
 
 
