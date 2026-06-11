@@ -108,7 +108,14 @@ def extract_candidates(transcript: str) -> list[dict]:
     except Exception as ex:
         log.error("Extraction failed: %s", ex)
         return []
-    return [i for i in insights[:5] if not _is_plan(i.get("material", []))]
+    out = []
+    for i in insights[:5]:
+        if _is_plan(i.get("material", [])):
+            continue
+        words = sum(len(m.split()) for m in i.get("material", []))
+        i["seed"] = words < 60  # too thin to assemble into a post without inventing
+        out.append(i)
+    return out
 
 
 def assemble(insight: dict) -> dict | None:

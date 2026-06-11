@@ -75,6 +75,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     action, item_id = q.data.split(":")
     item_id = int(item_id)
+    if action == "seedins":
+        cands = INSIGHT_CANDIDATES.get(q.message.chat_id, [])
+        if item_id < len(cands):
+            ins = cands[item_id]
+            note = ins.get("point", "") + "\n\nRaw material:\n- " + "\n- ".join(ins.get("material", []))
+            iid = store.add_insight("🌱 " + ins.get("label", ""), note, ins.get("transcript", ""))
+            store.set_insight_status(iid, "saved")
+            await context.bot.send_message(q.message.chat_id,
+                f"🌱 Seed saved to bank: {ins.get('label','')}. Develop it in a future ramble "
+                "— mention it again with more thought and the next capture will have the material.")
+        return
+
     if action == "draftins":
         cands = INSIGHT_CANDIDATES.get(q.message.chat_id, [])
         if item_id >= len(cands):
@@ -274,11 +286,18 @@ async def _run_capture(transcript: str, chat_id, context):
             "(Insights are arguable observations about the category.)")
         return
     INSIGHT_CANDIDATES[chat_id] = [dict(c, transcript=transcript[:4000]) for c in cands]
-    rows = [[InlineKeyboardButton(f"✍️ {i+1}. {c.get('label','')[:40]}",
-                                  callback_data=f"draftins:{i}")]
-            for i, c in enumerate(cands)]
-    lines = [f"<b>{i+1}. {c.get('label','')}</b> — {c.get('point','')}"
-             for i, c in enumerate(cands)]
+    rows = []
+    lines = []
+    for i, c in enumerate(cands):
+        if c.get("seed"):
+            lines.append(f"🌱 <b>{i+1}. {c.get('label','')}</b> — {c.get('point','')}\n"
+                         f"<i>(seed — too thin for a post yet; saved as a note if you tap)</i>")
+            rows.append([InlineKeyboardButton(f"🌱 {i+1}. Save seed: {c.get('label','')[:32]}",
+                                              callback_data=f"seedins:{i}")])
+        else:
+            lines.append(f"<b>{i+1}. {c.get('label','')}</b> — {c.get('point','')}")
+            rows.append([InlineKeyboardButton(f"✍️ {i+1}. Draft: {c.get('label','')[:36]}",
+                                              callback_data=f"draftins:{i}")])
     await context.bot.send_message(chat_id,
         "💡 Candidate insights — tap the ones worth drafting:\n\n" + "\n\n".join(lines),
         parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
