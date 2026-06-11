@@ -317,18 +317,29 @@ async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb)
 
 
+TG_LIMIT = 3800  # headroom under Telegram's 4096-char hard limit
+
+
 async def _send_radar(chat_id, context):
     items = radar.pending(20)
     if not items:
         await context.bot.send_message(chat_id, "🛰 Radar: nothing new this week.")
         return
-    lines = []
+    header = (f"🛰 <b>Radar</b> — {len(items)} item(s) worth knowing "
+              f"(private, never published):\n\n")
+    chunks, current = [], header
     for it in items:
-        lines.append(f"• <b>{it['headline']}</b>\n  <i>{it['why']}</i>\n  {it['url']}")
-    await context.bot.send_message(chat_id,
-        f"🛰 <b>Radar</b> — {len(items)} item(s) worth knowing (private, never published):\n\n"
-        + "\n\n".join(lines),
-        parse_mode="HTML", disable_web_page_preview=True)
+        why = (it.get("why") or "")[:500]
+        entry = f"• <b>{it['headline']}</b>\n  <i>{why}</i>\n  {it['url']}\n\n"
+        if len(current) + len(entry) > TG_LIMIT:
+            chunks.append(current)
+            current = ""
+        current += entry
+    if current.strip():
+        chunks.append(current)
+    for chunk in chunks:
+        await context.bot.send_message(chat_id, chunk.rstrip(),
+            parse_mode="HTML", disable_web_page_preview=True)
     radar.mark_sent([it["id"] for it in items])
 
 
@@ -450,11 +461,25 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 " + " · ".join(f"{k}: {v}" for k, v in sorted(c.items())) if c else "Empty.")
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    log.error("Unhandled exception:", exc_info=context.error)
+    chat_id = None
+    if isinstance(update, Update) and update.effective_chat:
+        chat_id = update.effective_chat.id
+    else:
+        chat_id = TELEGRAM_CHAT_ID
+    try:
+        await context.bot.send_message(chat_id, f"⚠️ Error: {context.error}")
+    except Exception:
+        pass
+
+
 def main():
     store.init()
     store.init_insights()
     radar.init()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_error_handler(on_error)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))
