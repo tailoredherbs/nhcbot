@@ -75,6 +75,29 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     action, item_id = q.data.split(":")
     item_id = int(item_id)
+    if action == "draftins":
+        cands = INSIGHT_CANDIDATES.get(q.message.chat_id, [])
+        if item_id >= len(cands):
+            await q.answer("Candidates expired — run capture again.", show_alert=True)
+            return
+        ins = cands[item_id]
+        await context.bot.send_message(q.message.chat_id, f"✍️ Drafting: {ins.get('label','')}…")
+        p = capture.assemble(ins)
+        if not p:
+            await context.bot.send_message(q.message.chat_id, "Assembly failed — try again.")
+            return
+        iid = store.add_insight(p["title"], p["post"], ins.get("transcript", ""))
+        pq = (p.get("pull_quote") or "").strip()
+        if pq:
+            try:
+                await context.bot.send_photo(q.message.chat_id, photo=socials.render_note_card(pq))
+            except Exception as ex:
+                logging.getLogger("main").error("Note card failed: %s", ex)
+        await context.bot.send_message(q.message.chat_id,
+            f"<b>{p['title']}</b>\n\n{p['post']}",
+            parse_mode="HTML", reply_markup=_insight_kb(iid))
+        return
+
     if action in ("saveins", "delins", "usedins"):
         ins = store.get_insight(item_id)
         if not ins:
@@ -240,25 +263,25 @@ def _insight_kb(iid):
     ]])
 
 
+INSIGHT_CANDIDATES: dict[int, list] = {}  # chat_id -> extracted candidates
+
+
 async def _run_capture(transcript: str, chat_id, context):
-    posts = capture.extract_posts(transcript)
-    if not posts:
+    cands = capture.extract_candidates(transcript)
+    if not cands:
         await context.bot.send_message(chat_id,
-            "Transcribed, but no post-worthy insight found in this one. "
-            "(Captured rambles need a specific, arguable observation.)")
+            "Transcribed, but no post-worthy insight found — only plans/process talk. "
+            "(Insights are arguable observations about the category.)")
         return
-    await context.bot.send_message(chat_id, f"💡 {len(posts)} draft(s) from your ramble:")
-    for p in posts:
-        iid = store.add_insight(p.get("title", ""), p.get("post", ""), transcript[:4000])
-        pq = (p.get("pull_quote") or "").strip()
-        if pq:
-            try:
-                await context.bot.send_photo(chat_id, photo=socials.render_note_card(pq))
-            except Exception as ex:
-                logging.getLogger("main").error("Note card failed: %s", ex)
-        await context.bot.send_message(chat_id,
-            f"<b>{p.get('title','')}</b>\n\n{p.get('post','')}",
-            parse_mode="HTML", reply_markup=_insight_kb(iid))
+    INSIGHT_CANDIDATES[chat_id] = [dict(c, transcript=transcript[:4000]) for c in cands]
+    rows = [[InlineKeyboardButton(f"✍️ {i+1}. {c.get('label','')[:40]}",
+                                  callback_data=f"draftins:{i}")]
+            for i, c in enumerate(cands)]
+    lines = [f"<b>{i+1}. {c.get('label','')}</b> — {c.get('point','')}"
+             for i, c in enumerate(cands)]
+    await context.bot.send_message(chat_id,
+        "💡 Candidate insights — tap the ones worth drafting:\n\n" + "\n\n".join(lines),
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):

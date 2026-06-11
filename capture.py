@@ -30,7 +30,11 @@ An insight = ONE specific, arguable observation about the premium wellness categ
 (longevity clinics, retreats, social wellness clubs, practitioners) — something about
 how the WORLD is, that a reader could disagree with. STRICTLY EXCLUDED: his plans and
 intentions ("I want to...", "the site should..."), to-dos, and business strategy —
-those are not insights. Keep insights strictly separate — never merge two points that
+those are not insights. Example of what to EXCLUDE: "I do not want to make the site
+only about longevity. I also want to find top-notch retreats." — that is a plan about
+his own platform, worthless to a reader. Example of what to INCLUDE: "How many actual
+longevity experts are there on this planet? Probably not enough to staff these
+centers." — an arguable claim about the world. Keep insights strictly separate — never merge two points that
 happen to be adjacent in the ramble. If two candidate insights substantially overlap,
 keep only the stronger one.
 
@@ -85,7 +89,18 @@ def transcribe(audio: bytes, filename: str = "voice.oga") -> str | None:
         return None
 
 
-def extract_posts(transcript: str) -> list[dict]:
+_PLAN_MARKERS = ("i want", "i do not want", "i also want", "i would like",
+                 "the site", "my list", "my map", "i wanna", "we should", "i need to")
+
+def _is_plan(material: list[str]) -> bool:
+    if not material:
+        return True
+    hits = sum(1 for m in material if any(p in m.lower() for p in _PLAN_MARKERS))
+    return hits / len(material) > 0.4
+
+
+def extract_candidates(transcript: str) -> list[dict]:
+    """Stage 1 only: candidate insights with their verbatim material."""
     try:
         out = _parse(_call_llm(EXTRACT_BRIEF, f"TRANSCRIPT:\n{transcript}",
                                max_tokens=2000, temperature=0.2))
@@ -93,18 +108,19 @@ def extract_posts(transcript: str) -> list[dict]:
     except Exception as ex:
         log.error("Extraction failed: %s", ex)
         return []
+    return [i for i in insights[:5] if not _is_plan(i.get("material", []))]
 
-    posts = []
-    for ins in insights[:3]:
-        user = (f"THE INSIGHT: {ins.get('point','')}\n\n"
-                f"HIS VERBATIM MATERIAL:\n- " + "\n- ".join(ins.get("material", [])))
-        try:
-            draft = _parse(_call_llm(SECRETARY_BRIEF, user,
-                                     max_tokens=1500, temperature=0.3))
-            if draft and draft.get("post"):
-                posts.append({"title": ins.get("label", ""),
-                              "post": draft.get("post", ""),
-                              "pull_quote": draft.get("pull_quote", "")})
-        except Exception as ex:
-            log.error("Assembly failed for '%s': %s", ins.get("label"), ex)
-    return posts
+
+def assemble(insight: dict) -> dict | None:
+    """Stage 2 on demand: secretary-mode assembly of one chosen insight."""
+    user = (f"THE INSIGHT: {insight.get('point','')}\n\n"
+            f"HIS VERBATIM MATERIAL:\n- " + "\n- ".join(insight.get("material", [])))
+    try:
+        draft = _parse(_call_llm(SECRETARY_BRIEF, user, max_tokens=1500, temperature=0.3))
+        if draft and draft.get("post"):
+            return {"title": insight.get("label", ""),
+                    "post": draft["post"],
+                    "pull_quote": draft.get("pull_quote", "")}
+    except Exception as ex:
+        log.error("Assembly failed: %s", ex)
+    return None
