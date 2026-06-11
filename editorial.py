@@ -18,6 +18,11 @@ Execution Hubs / longevity clinics, Practitioner-Led Boutiques, Retreats, Clubs)
 Priority: venues already on the Index > premium peers not yet mapped > mid-market
 only if it signals a model shift.
 
+BALANCE NOTE: the source mix over-represents longevity-clinic and fitness news. Actively
+prioritize retreat, somatic, contemplative, spa, and destination-wellness venue news to
+keep the feed representative of the whole category — a strong retreat opening outranks a
+routine longevity-clinic story. Quality of operator matters more than price point.
+
 RING 2 - SELECTIVELY IN (business layer):
 - Funding rounds, M&A, franchise programs of venue operators
 - Hospitality groups building wellness arms; brand-led club concepts

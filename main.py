@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-import store, sources, filter_llm, publisher, socials, reports_gen
+import store, sources, filter_llm, publisher, socials, reports_gen, capture
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST)
 
@@ -75,6 +75,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     action, item_id = q.data.split(":")
     item_id = int(item_id)
+    if action in ("saveins", "delins", "usedins"):
+        ins = store.get_insight(item_id)
+        if not ins:
+            await q.edit_message_text("Insight not found.")
+            return
+        if action == "saveins":
+            store.set_insight_status(item_id, "saved")
+            await q.edit_message_text(f"💾 Saved to bank: {ins['title']}\n\n{ins['post']}",
+                parse_mode=None)
+        elif action == "usedins":
+            store.set_insight_status(item_id, "used")
+            await q.edit_message_text(f"✔️ Marked used: {ins['title']}")
+        else:
+            store.set_insight_status(item_id, "discarded")
+            await q.edit_message_text(f"🗑 Discarded: {ins['title']}")
+        return
+
     item, llm = None, None
     if action not in ("repub", "redraft", "rediscard"):
         item = store.get(item_id)
@@ -165,6 +182,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     if chat_id not in AWAITING_EDIT:
+        if len(update.message.text or "") > 300:
+            await update.message.reply_text("💡 Treating this as a capture — extracting…")
+            await _run_capture(update.message.text, chat_id, context)
         return
     item_id = AWAITING_EDIT.pop(chat_id)
     item = store.get(item_id)
@@ -213,6 +233,68 @@ async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
 
 
+def _insight_kb(iid):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("💾 Save to bank", callback_data=f"saveins:{iid}"),
+        InlineKeyboardButton("🗑 Discard", callback_data=f"delins:{iid}"),
+    ]])
+
+
+async def _run_capture(transcript: str, chat_id, context):
+    posts = capture.extract_posts(transcript)
+    if not posts:
+        await context.bot.send_message(chat_id,
+            "Transcribed, but no post-worthy insight found in this one. "
+            "(Captured rambles need a specific, arguable observation.)")
+        return
+    await context.bot.send_message(chat_id, f"💡 {len(posts)} draft(s) from your ramble:")
+    for p in posts:
+        iid = store.add_insight(p.get("title", ""), p.get("post", ""), transcript[:4000])
+        await context.bot.send_message(chat_id,
+            f"<b>{p.get('title','')}</b>\n\n{p.get('post','')}",
+            parse_mode="HTML", reply_markup=_insight_kb(iid))
+
+
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    v = msg.voice or msg.audio
+    if not v:
+        return
+    await msg.reply_text("🎙 Transcribing…")
+    tg_file = await context.bot.get_file(v.file_id)
+    audio = bytes(await tg_file.download_as_bytearray())
+    transcript = capture.transcribe(audio)
+    if not transcript:
+        await msg.reply_text("Transcription failed — is OPENAI_API_KEY set? (Whisper needs it.)")
+        return
+    await _run_capture(transcript, msg.chat_id, context)
+
+
+async def cmd_capture(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.partition(" ")[2].strip()
+    if not text:
+        await update.message.reply_text("Usage: /capture <your ramble> — or just send a voice note.")
+        return
+    await update.message.reply_text("💡 Extracting…")
+    await _run_capture(text, update.message.chat_id, context)
+
+
+async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = store.saved_insights()
+    if not items:
+        await update.message.reply_text("Insight bank is empty. Send a voice note to fill it.")
+        return
+    await update.message.reply_text(f"🏦 {len(items)} saved insight(s):")
+    for it in items:
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✔️ Mark used", callback_data=f"usedins:{it['id']}"),
+            InlineKeyboardButton("🗑 Remove", callback_data=f"delins:{it['id']}"),
+        ]])
+        await update.message.reply_text(
+            f"<b>#{it['id']} {it['title']}</b>\n\n{it['post']}",
+            parse_mode="HTML", reply_markup=kb)
+
+
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     days = None
@@ -254,6 +336,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     store.init()
+    store.init_insights()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("digest", cmd_digest))
@@ -261,6 +344,9 @@ def main():
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("rejected", cmd_rejected))
     app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("capture", cmd_capture))
+    app.add_handler(CommandHandler("ideas", cmd_ideas))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     tz = zoneinfo.ZoneInfo(TZ)
@@ -272,3 +358,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# cache-bust 1781137158

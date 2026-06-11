@@ -64,3 +64,33 @@ def rejected_recent(limit=15):
     with _conn() as c:
         return [dict(r) for r in c.execute(
             "SELECT * FROM items WHERE status='rejected' ORDER BY id DESC LIMIT ?", (limit,))]
+
+def init_insights():
+    with _conn() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS insights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT, post TEXT, transcript TEXT,
+            status TEXT DEFAULT 'draft',  -- draft|saved|used|discarded
+            created_at INTEGER
+        )""")
+
+def add_insight(title, post, transcript) -> int:
+    import time as _t
+    with _conn() as c:
+        cur = c.execute("INSERT INTO insights (title, post, transcript, created_at) VALUES (?,?,?,?)",
+                        (title, post, transcript, int(_t.time())))
+        return cur.lastrowid
+
+def set_insight_status(iid, status):
+    with _conn() as c:
+        c.execute("UPDATE insights SET status=? WHERE id=?", (status, iid))
+
+def get_insight(iid):
+    with _conn() as c:
+        r = c.execute("SELECT * FROM insights WHERE id=?", (iid,)).fetchone()
+        return dict(r) if r else None
+
+def saved_insights(limit=25):
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM insights WHERE status='saved' ORDER BY id DESC LIMIT ?", (limit,))]
