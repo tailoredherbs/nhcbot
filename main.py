@@ -321,6 +321,7 @@ TG_LIMIT = 3800  # headroom under Telegram's 4096-char hard limit
 
 
 async def _send_radar(chat_id, context):
+    import html as _html
     items = radar.pending(20)
     if not items:
         await context.bot.send_message(chat_id, "🛰 Radar: nothing new this week.")
@@ -329,8 +330,10 @@ async def _send_radar(chat_id, context):
               f"(private, never published):\n\n")
     chunks, current = [], header
     for it in items:
-        why = (it.get("why") or "")[:500]
-        entry = f"• <b>{it['headline']}</b>\n  <i>{why}</i>\n  {it['url']}\n\n"
+        headline = _html.escape(it.get("headline") or it.get("title") or "")
+        detail = _html.escape((it.get("why") or "")[:600])
+        entry = (f"• <a href=\"{it['url']}\"><b>{headline}</b></a>\n"
+                 f"{detail}\n\n")
         if len(current) + len(entry) > TG_LIMIT:
             chunks.append(current)
             current = ""
