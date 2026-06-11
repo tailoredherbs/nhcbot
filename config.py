@@ -38,6 +38,9 @@ RADAR_FEEDS = {
     "Peter Attia": "https://peterattiamd.com/feed/",
     "Psychedelic Alpha": "https://psychedelicalpha.com/feed/",
     "Longevity.Technology (science)": "https://longevity.technology/feed/",
+    "DoubleBlind (psychedelics)": "https://doubleblindmag.com/feed/",
+    "News scan: retreat incidents": "https://news.google.com/rss/search?q=%22retreat%22+(death+OR+lawsuit+OR+investigation+OR+misconduct+OR+allegations)+(wellness+OR+meditation+OR+ayahuasca+OR+psilocybin)&hl=en-US&gl=US&ceid=US:en",
+    "News scan: psychedelic retreat regulation": "https://news.google.com/rss/search?q=(psilocybin+OR+ayahuasca+OR+ibogaine)+retreat+(legal+OR+regulation+OR+license+OR+program)&hl=en-US&gl=US&ceid=US:en",
 }
 RADAR_DIGEST_DAY = int(os.environ.get("RADAR_DIGEST_DAY", "6"))   # 0=Mon .. 6=Sun
 RADAR_DIGEST_HOUR = int(os.environ.get("RADAR_DIGEST_HOUR", "9"))

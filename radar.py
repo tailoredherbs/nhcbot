@@ -25,6 +25,12 @@ INCLUDE only items a high-end wellness concierge should know about:
   red light, cryotherapy
 - Major credibility events: retractions, fraud, safety signals around prominent
   therapies or figures
+- RETREAT SAFETY (high priority): facilitator misconduct allegations, deaths or serious
+  incidents at retreats, lawsuits against retreat operators, jurisdiction crackdowns
+  or legalizations affecting retreat operations, adverse-effects research on intensive
+  meditation or psychedelic programs
+- Notable retreat-world moves: a major program/teacher launching a new format or
+  location (Hoffman, Esalen, Modern Elder Academy, Buchinger Wilhelmi tier)
 
 EXCLUDE: mouse/cell-only incremental studies, supplement marketing, lifestyle listicles,
 routine biotech funding, opinion pieces without new facts.
