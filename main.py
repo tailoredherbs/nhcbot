@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-import store, sources, filter_llm, publisher, socials, reports_gen, capture
+import store, sources, filter_llm, publisher, socials, reports_gen, capture, radar
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST)
 
@@ -316,6 +316,32 @@ async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=kb)
 
 
+async def _send_radar(chat_id, context):
+    items = radar.pending(20)
+    if not items:
+        await context.bot.send_message(chat_id, "🛰 Radar: nothing new this week.")
+        return
+    lines = []
+    for it in items:
+        lines.append(f"• <b>{it['headline']}</b>\n  <i>{it['why']}</i>\n  {it['url']}")
+    await context.bot.send_message(chat_id,
+        f"🛰 <b>Radar</b> — {len(items)} item(s) worth knowing (private, never published):\n\n"
+        + "\n\n".join(lines),
+        parse_mode="HTML", disable_web_page_preview=True)
+    radar.mark_sent([it["id"] for it in items])
+
+
+async def job_radar(context: ContextTypes.DEFAULT_TYPE):
+    radar.fetch_and_filter()
+    await _send_radar(TELEGRAM_CHAT_ID, context)
+
+
+async def cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🛰 Scanning radar feeds…")
+    n = radar.fetch_and_filter()
+    await _send_radar(update.message.chat_id, context)
+
+
 async def cmd_compile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seeds = [s for s in store.saved_insights(50) if s["title"].startswith("🌱")]
     if len(seeds) < 2:
@@ -361,6 +387,11 @@ After publishing: 📣 Social pack — card image + Instagram and LinkedIn capti
 <b>Reports</b>
 /report — synthesize signals since the last report into a Market Report draft
 /report 180 — same, with a 180-day window
+
+<b>Radar (private — never published)</b>
+/radar — scan science/regulatory feeds now; weekly digest arrives Sundays 09:00
+Covers: longevity trials, therapy evidence shifts, psychedelic medicine access,
+diagnostics, regulatory moves
 
 <b>Thinking capture</b>
 Send a voice note, paste a long text, or /capture &lt;text&gt; — becomes either one
@@ -417,6 +448,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     store.init()
     store.init_insights()
+    radar.init()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("digest", cmd_digest))
@@ -426,6 +458,7 @@ def main():
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("capture", cmd_capture))
     app.add_handler(CommandHandler("compile", cmd_compile))
+    app.add_handler(CommandHandler("radar", cmd_radar))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("ideas", cmd_ideas))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
@@ -434,6 +467,9 @@ def main():
     tz = zoneinfo.ZoneInfo(TZ)
     app.job_queue.run_repeating(job_fetch_and_filter, interval=FETCH_EVERY_HOURS * 3600, first=20)
     app.job_queue.run_daily(job_digest, time=datetime.time(hour=DIGEST_HOUR, tzinfo=tz))
+    from config import RADAR_DIGEST_DAY, RADAR_DIGEST_HOUR
+    app.job_queue.run_daily(job_radar, time=datetime.time(hour=RADAR_DIGEST_HOUR, tzinfo=tz),
+                            days=(RADAR_DIGEST_DAY,))
     log.info("Bot up. Fetch every %dh, digest daily at %02d:00 %s", FETCH_EVERY_HOURS, DIGEST_HOUR, TZ)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

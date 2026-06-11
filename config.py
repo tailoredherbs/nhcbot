@@ -23,10 +23,21 @@ SITE_URL = os.environ.get("SITE_URL", "https://thenewhealthclubs.com")
 # --- Sources ---
 # Run discover_feeds.py once to verify/correct these URLs, then update here.
 FEEDS = {
-    "HCM (Health Club Management)": "https://www.leisureopportunities.co.uk/rss/rss_news.cfm?section=HAF",
-    "Spa Business": "https://www.leisureopportunities.co.uk/rss/rss_news.cfm?section=SPA",
+    "HCM (Health Club Management)": "https://www.healthclubmanagement.co.uk/rss",
+    "Spa Business": "https://www.spabusiness.com/rss",
     "Athletech News": "https://athletechnews.com/feed/",
     "American Spa": "https://www.americanspa.com/rss.xml",
     "Welltodo": "https://www.welltodoglobal.com/feed/",
     "Longevity.Technology": "https://longevity.technology/feed/",
+    "Spa Executive": "https://spaexecutive.com/feed/",
 }
+
+# --- Private radar (never published): science & regulatory awareness for the desk ---
+RADAR_FEEDS = {
+    "Lifespan.io": "https://www.lifespan.io/feed/",
+    "Peter Attia": "https://peterattiamd.com/feed/",
+    "Psychedelic Alpha": "https://psychedelicalpha.com/feed/",
+    "Longevity.Technology (science)": "https://longevity.technology/feed/",
+}
+RADAR_DIGEST_DAY = int(os.environ.get("RADAR_DIGEST_DAY", "6"))   # 0=Mon .. 6=Sun
+RADAR_DIGEST_HOUR = int(os.environ.get("RADAR_DIGEST_HOUR", "9"))
