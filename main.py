@@ -357,7 +357,11 @@ async def cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛰 Scanning radar feeds… first run can take several minutes (backlog); "
         "after that it is quick. The digest arrives when done.")
-    await asyncio.to_thread(radar.fetch_and_filter)
+    stats = await asyncio.to_thread(radar.fetch_and_filter)
+    await update.message.reply_text(
+        f"🛰 Scan: {stats['scanned']} new · {stats['kept']} kept · "
+        f"{stats['excluded']} excluded · {stats['errors']} filter errors · "
+        f"{stats['feed_fail']} feeds failed")
     await _send_radar(update.message.chat_id, context)
 
 
