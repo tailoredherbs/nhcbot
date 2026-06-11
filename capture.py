@@ -1,6 +1,6 @@
-"""Insight capture v4: extract -> write per-insight -> de-slop. Voice/text rambles
-become LinkedIn POV drafts."""
-import logging
+"""Insight capture, final: one ramble -> one post (reports voice) or one auto-saved
+seed. /compile turns accumulated seeds into posts when enough material clusters."""
+import json, logging
 import requests
 
 from config import OPENAI_API_KEY
@@ -8,70 +8,49 @@ from filter_llm import _call_llm, _parse
 
 log = logging.getLogger("capture")
 
-# Paste 2-3 paragraphs of Jakob's own published writing between the triple quotes
-# below — they anchor the voice far better than any rule list. Until then the
-# rules carry it alone.
-WRITING_SAMPLES = """"""
+POV_VOICE = """VOICE — the same register as The New Health Club market reports, in first
+person: declarative, operator-literate, specific. No contractions. Short paragraphs of
+1-3 sentences separated by blank lines. State the observation, develop it through his
+concrete material — preserve his phrasings, numbers, and examples where strong — and
+close plainly on what it means. No hype adjectives, no emojis, no exclamation marks,
+no rhetorical-question hooks, 0-2 hashtags or none."""
 
-VOICE_RULES = """HIS VOICE:
-- Declarative sentences. No contractions. Fragments allowed. Uneven rhythm is style.
-- Measured and reflective. He thinks out loud with quiet authority. Skepticism reads
-  as experience, not attack.
-- Concrete over abstract, always. His actual phrasings, numbers, and examples survive.
-- No emojis, no exclamation marks, 0-2 hashtags or none, no rhetorical-question hooks,
-  maximum 2 em dashes.
-- Critique patterns, never named venues or people. Named venues only positive/neutral.
-"""
+PROCESS_BRIEF = """You process a spoken work-ramble from Jakob, founder of The New
+Health Club (field intelligence on premium wellness spaces: longevity sanctuaries,
+clinics, retreats, social wellness clubs) and New Health Access (private placement desk).
 
-EXTRACT_BRIEF = """You analyze a spoken work-ramble from the founder of a wellness
-field-intelligence platform. Identify the 1-3 DISTINCT post-worthy insights.
+""" + POV_VOICE + """
 
-An insight = ONE specific, arguable observation about the premium wellness category
-(longevity clinics, retreats, social wellness clubs, practitioners) — something about
-how the WORLD is, that a reader could disagree with. STRICTLY EXCLUDED: his plans and
-intentions ("I want to...", "the site should..."), to-dos, and business strategy —
-those are not insights. Example of what to EXCLUDE: "I do not want to make the site
-only about longevity. I also want to find top-notch retreats." — that is a plan about
-his own platform, worthless to a reader. Example of what to INCLUDE: "How many actual
-longevity experts are there on this planet? Probably not enough to staff these
-centers." — an arguable claim about the world. Keep insights strictly separate — never merge two points that
-happen to be adjacent in the ramble. If two candidate insights substantially overlap,
-keep only the stronger one.
+DECIDE: Does the ramble contain enough developed, postable material for ONE solid
+LinkedIn post of 120-250 words built substantially from his own sentences?
 
-For each insight collect his raw material GENEROUSLY: every verbatim sentence and
-phrase from the transcript that touches it, in original order, including the rough
-ones — 6-15 items. The next stage can only use what you collect.
+- If YES: write that one post. Synthesize the connected threads into one argument —
+  do not fragment it. Also select its strongest line as a pull quote (max 16 words,
+  from the post).
+- If NO (thought too thin, or mostly plans/process-talk, or mostly out-of-scope
+  opinion): save it as a seed instead — a 1-2 sentence summary of the core thought
+  plus the verbatim phrases worth keeping.
 
-If nothing qualifies, return an empty list.
+Respond ONLY with JSON, no fences. Either:
+{"mode": "post", "title": "3-6 word label", "post": "...", "pull_quote": "..."}
+or:
+{"mode": "seed", "title": "3-6 word label", "summary": "1-2 sentence core thought",
+ "material": ["verbatim phrase", "..."]}"""
 
-Respond ONLY with JSON, no fences:
-{"insights": [{"label": "3-6 word internal label",
-  "point": "the single claim, one sentence, in plain words",
-  "material": ["verbatim phrase 1", "verbatim phrase 2", "..."]}]}"""
+COMPILE_BRIEF = """You compile saved seed-thoughts from Jakob into LinkedIn posts.
+Each seed has an id, a core thought, and raw verbatim material.
 
-SECRETARY_BRIEF = """You are a respectful secretary, not a ghost-writer. You turn one
-insight from Jakob's spoken ramble into a LinkedIn post using HIS OWN WORDS.
+""" + POV_VOICE + """
 
-THE METHOD — follow exactly:
-1. Take the verbatim material provided. These are his actual sentences.
-2. Select the sentences that carry the single insight given. Discard the rest.
-3. Clean only: remove filler words (like, right, you know, kind of, basically, I mean),
-   false starts, and exact repetitions. Expand obvious fragments minimally so they
-   parse. Remove contractions (it's -> it is). Fix nothing else.
-4. Arrange into a post: 100-250 words, short paragraphs separated by blank lines.
-   You may add AT MOST two short connective phrases of your own (e.g. "And yet.",
-   "That is the gap."). Nothing else may be invented — no new examples, no new claims,
-   no vocabulary that is not his.
-5. If his material ends without a conclusion, end the post where his thought ends.
-   Do not write a closing summary for him.
-
-The result should sound like a person thinking, not like content. Rough is correct.
-
-Also select the single strongest line as a pull quote (max 16 words, verbatim from
-the post).
+TASK: Group seeds that genuinely belong to one argument. For each group with enough
+combined material, write ONE post of 120-250 words built substantially from his
+verbatim material, synthesized into a single argument. Ignore groups still too thin —
+do not pad. A seed may be used in at most one post.
 
 Respond ONLY with JSON, no fences:
-{"post": "the assembled post", "pull_quote": "strongest line"}"""
+{"posts": [{"title": "3-6 word label", "post": "...", "pull_quote": "max 16 words",
+"seed_ids": [ids of the seeds used]}]}
+If nothing has enough material, return {"posts": []}."""
 
 
 def transcribe(audio: bytes, filename: str = "voice.oga") -> str | None:
@@ -89,45 +68,23 @@ def transcribe(audio: bytes, filename: str = "voice.oga") -> str | None:
         return None
 
 
-_PLAN_MARKERS = ("i want", "i do not want", "i also want", "i would like",
-                 "the site", "my list", "my map", "i wanna", "we should", "i need to")
-
-def _is_plan(material: list[str]) -> bool:
-    if not material:
-        return True
-    hits = sum(1 for m in material if any(p in m.lower() for p in _PLAN_MARKERS))
-    return hits / len(material) > 0.4
-
-
-def extract_candidates(transcript: str) -> list[dict]:
-    """Stage 1 only: candidate insights with their verbatim material."""
+def process(transcript: str) -> dict | None:
     try:
-        out = _parse(_call_llm(EXTRACT_BRIEF, f"TRANSCRIPT:\n{transcript}",
-                               max_tokens=2000, temperature=0.2))
-        insights = (out or {}).get("insights", [])
+        return _parse(_call_llm(PROCESS_BRIEF, f"TRANSCRIPT:\n{transcript}",
+                                max_tokens=2000, temperature=0.4))
     except Exception as ex:
-        log.error("Extraction failed: %s", ex)
+        log.error("Capture processing failed: %s", ex)
+        return None
+
+
+def compile_seeds(seeds: list[dict]) -> list[dict]:
+    lines = []
+    for s in seeds:
+        lines.append(f"SEED id={s['id']} — {s['title']}\n{s['post']}")
+    try:
+        out = _parse(_call_llm(COMPILE_BRIEF, "\n\n".join(lines),
+                               max_tokens=3000, temperature=0.4))
+        return (out or {}).get("posts", [])
+    except Exception as ex:
+        log.error("Seed compile failed: %s", ex)
         return []
-    out = []
-    for i in insights[:5]:
-        if _is_plan(i.get("material", [])):
-            continue
-        words = sum(len(m.split()) for m in i.get("material", []))
-        i["seed"] = words < 60  # too thin to assemble into a post without inventing
-        out.append(i)
-    return out
-
-
-def assemble(insight: dict) -> dict | None:
-    """Stage 2 on demand: secretary-mode assembly of one chosen insight."""
-    user = (f"THE INSIGHT: {insight.get('point','')}\n\n"
-            f"HIS VERBATIM MATERIAL:\n- " + "\n- ".join(insight.get("material", [])))
-    try:
-        draft = _parse(_call_llm(SECRETARY_BRIEF, user, max_tokens=1500, temperature=0.3))
-        if draft and draft.get("post"):
-            return {"title": insight.get("label", ""),
-                    "post": draft["post"],
-                    "pull_quote": draft.get("pull_quote", "")}
-    except Exception as ex:
-        log.error("Assembly failed: %s", ex)
-    return None

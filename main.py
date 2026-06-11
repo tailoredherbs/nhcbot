@@ -75,39 +75,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     action, item_id = q.data.split(":")
     item_id = int(item_id)
-    if action == "seedins":
-        cands = INSIGHT_CANDIDATES.get(q.message.chat_id, [])
-        if item_id < len(cands):
-            ins = cands[item_id]
-            note = ins.get("point", "") + "\n\nRaw material:\n- " + "\n- ".join(ins.get("material", []))
-            iid = store.add_insight("🌱 " + ins.get("label", ""), note, ins.get("transcript", ""))
-            store.set_insight_status(iid, "saved")
-            await context.bot.send_message(q.message.chat_id,
-                f"🌱 Seed saved to bank: {ins.get('label','')}. Develop it in a future ramble "
-                "— mention it again with more thought and the next capture will have the material.")
-        return
-
-    if action == "draftins":
-        cands = INSIGHT_CANDIDATES.get(q.message.chat_id, [])
-        if item_id >= len(cands):
-            await q.answer("Candidates expired — run capture again.", show_alert=True)
-            return
-        ins = cands[item_id]
-        await context.bot.send_message(q.message.chat_id, f"✍️ Drafting: {ins.get('label','')}…")
-        p = capture.assemble(ins)
-        if not p:
-            await context.bot.send_message(q.message.chat_id, "Assembly failed — try again.")
-            return
-        iid = store.add_insight(p["title"], p["post"], ins.get("transcript", ""))
-        pq = (p.get("pull_quote") or "").strip()
-        if pq:
-            try:
-                await context.bot.send_photo(q.message.chat_id, photo=socials.render_note_card(pq))
-            except Exception as ex:
-                logging.getLogger("main").error("Note card failed: %s", ex)
-        await context.bot.send_message(q.message.chat_id,
-            f"<b>{p['title']}</b>\n\n{p['post']}",
-            parse_mode="HTML", reply_markup=_insight_kb(iid))
+    if action in ("seedins", "draftins"):
+        await q.answer("This flow was replaced — just resend the ramble.", show_alert=True)
         return
 
     if action in ("saveins", "delins", "usedins"):
@@ -117,6 +86,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if action == "saveins":
             store.set_insight_status(item_id, "saved")
+            for sid in COMPILED_PENDING.pop(item_id, []):
+                store.set_insight_status(sid, "used")
             await q.edit_message_text(f"💾 Saved to bank: {ins['title']}\n\n{ins['post']}",
                 parse_mode=None)
         elif action == "usedins":
@@ -275,32 +246,34 @@ def _insight_kb(iid):
     ]])
 
 
-INSIGHT_CANDIDATES: dict[int, list] = {}  # chat_id -> extracted candidates
+COMPILED_PENDING: dict[int, list] = {}  # insight_id -> seed ids consumed
 
 
 async def _run_capture(transcript: str, chat_id, context):
-    cands = capture.extract_candidates(transcript)
-    if not cands:
-        await context.bot.send_message(chat_id,
-            "Transcribed, but no post-worthy insight found — only plans/process talk. "
-            "(Insights are arguable observations about the category.)")
+    r = capture.process(transcript)
+    if not r or not r.get("mode"):
+        await context.bot.send_message(chat_id, "Processing failed — check logs.")
         return
-    INSIGHT_CANDIDATES[chat_id] = [dict(c, transcript=transcript[:4000]) for c in cands]
-    rows = []
-    lines = []
-    for i, c in enumerate(cands):
-        if c.get("seed"):
-            lines.append(f"🌱 <b>{i+1}. {c.get('label','')}</b> — {c.get('point','')}\n"
-                         f"<i>(seed — too thin for a post yet; saved as a note if you tap)</i>")
-            rows.append([InlineKeyboardButton(f"🌱 {i+1}. Save seed: {c.get('label','')[:32]}",
-                                              callback_data=f"seedins:{i}")])
-        else:
-            lines.append(f"<b>{i+1}. {c.get('label','')}</b> — {c.get('point','')}")
-            rows.append([InlineKeyboardButton(f"✍️ {i+1}. Draft: {c.get('label','')[:36]}",
-                                              callback_data=f"draftins:{i}")])
+    if r["mode"] == "seed":
+        note = (r.get("summary", "") + "\n\nRaw material:\n- "
+                + "\n- ".join(r.get("material", [])))
+        iid = store.add_insight("🌱 " + r.get("title", ""), note, transcript[:4000])
+        store.set_insight_status(iid, "saved")
+        await context.bot.send_message(chat_id,
+            f"🌱 Saved as seed: <b>{r.get('title','')}</b>\n{r.get('summary','')}\n\n"
+            f"Not enough for a post yet — /compile will pick it up once related "
+            f"thoughts accumulate.", parse_mode="HTML")
+        return
+    iid = store.add_insight(r.get("title", ""), r.get("post", ""), transcript[:4000])
+    pq = (r.get("pull_quote") or "").strip()
+    if pq:
+        try:
+            await context.bot.send_photo(chat_id, photo=socials.render_note_card(pq))
+        except Exception as ex:
+            logging.getLogger("main").error("Note card failed: %s", ex)
     await context.bot.send_message(chat_id,
-        "💡 Candidate insights — tap the ones worth drafting:\n\n" + "\n\n".join(lines),
-        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+        f"<b>{r.get('title','')}</b>\n\n{r.get('post','')}",
+        parse_mode="HTML", reply_markup=_insight_kb(iid))
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,6 +314,65 @@ async def cmd_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"<b>#{it['id']} {it['title']}</b>\n\n{it['post']}",
             parse_mode="HTML", reply_markup=kb)
+
+
+async def cmd_compile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    seeds = [s for s in store.saved_insights(50) if s["title"].startswith("🌱")]
+    if len(seeds) < 2:
+        await update.message.reply_text(
+            f"Only {len(seeds)} seed(s) in the bank — /compile needs at least 2. "
+            "Send more rambles first.")
+        return
+    await update.message.reply_text(f"🧩 Compiling {len(seeds)} seeds…")
+    posts = capture.compile_seeds(seeds)
+    if not posts:
+        await update.message.reply_text(
+            "No seed cluster has enough material for a solid post yet. They stay in the bank.")
+        return
+    for p in posts:
+        iid = store.add_insight(p.get("title", ""), p.get("post", ""), "compiled from seeds")
+        COMPILED_PENDING[iid] = p.get("seed_ids", [])
+        pq = (p.get("pull_quote") or "").strip()
+        if pq:
+            try:
+                await context.bot.send_photo(update.message.chat_id,
+                    photo=socials.render_note_card(pq))
+            except Exception:
+                pass
+        await update.message.reply_text(
+            f"<b>{p.get('title','')}</b>\n<i>compiled from {len(p.get('seed_ids',[]))} seed(s)</i>\n\n"
+            f"{p.get('post','')}",
+            parse_mode="HTML", reply_markup=_insight_kb(iid))
+
+
+HELP_TEXT = """<b>NHC Pipeline — commands</b>
+
+<b>News flow</b>
+/fetch — pull the trade feeds now (also runs automatically every 6h)
+/digest — show pending signal candidates (also arrives daily at 08:00)
+/rejected — last 15 rejected items with reasons, ♻️ to override
+/stats — counts by status
+
+<b>Publishing</b>
+On each signal card: ✅ Publish (commits to the site) · ✏️ Edit (reply with an
+instruction, or TEXT: to replace the body) · ❌ Skip
+After publishing: 📣 Social pack — card image + Instagram and LinkedIn captions
+
+<b>Reports</b>
+/report — synthesize signals since the last report into a Market Report draft
+/report 180 — same, with a 180-day window
+
+<b>Thinking capture</b>
+Send a voice note, paste a long text, or /capture &lt;text&gt; — becomes either one
+LinkedIn-ready post (reports voice) or a 🌱 seed if too thin
+/ideas — your saved insight bank (posts and seeds)
+/compile — cluster the saved seeds into posts once enough material has accumulated
+
+/help — this message"""
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(HELP_TEXT, parse_mode="HTML")
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -393,6 +425,8 @@ def main():
     app.add_handler(CommandHandler("rejected", cmd_rejected))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("capture", cmd_capture))
+    app.add_handler(CommandHandler("compile", cmd_compile))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("ideas", cmd_ideas))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
