@@ -94,3 +94,8 @@ def saved_insights(limit=25):
     with _conn() as c:
         return [dict(r) for r in c.execute(
             "SELECT * FROM insights WHERE status='saved' ORDER BY id DESC LIMIT ?", (limit,))]
+
+def get_by_url(url: str):
+    with _conn() as c:
+        r = c.execute("SELECT * FROM items WHERE url_hash=?", (hash_url(url),)).fetchone()
+        return dict(r) if r else None

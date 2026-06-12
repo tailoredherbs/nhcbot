@@ -130,3 +130,9 @@ def pending(limit=20):
 def mark_sent(ids):
     with _conn() as c:
         c.executemany("UPDATE radar_items SET status='sent' WHERE id=?", [(i,) for i in ids])
+
+
+def get(rid: int):
+    with _conn() as c:
+        r = c.execute("SELECT * FROM radar_items WHERE id=?", (rid,)).fetchone()
+        return dict(r) if r else None

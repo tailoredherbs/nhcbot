@@ -46,3 +46,13 @@ def load_index_venues() -> list[str]:
     except Exception as ex:
         log.warning("Could not load spaces-data.json: %s", ex)
         return []
+
+def fetch_page_text(url: str, limit=1800) -> str:
+    """Fetch a page and return readable text — used for manual /signal suggestions."""
+    try:
+        resp = requests.get(url, headers=UA, timeout=20)
+        text = re.sub(r"(?is)<(script|style|nav|header|footer)[^>]*>.*?</\1>", " ", resp.text)
+        return _clean(text, limit)
+    except Exception as ex:
+        log.warning("Page fetch failed %s: %s", url, ex)
+        return ""

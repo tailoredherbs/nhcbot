@@ -80,6 +80,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("This flow was replaced — just resend the ramble.", show_alert=True)
         return
 
+    if action == "rad2sig":
+        rit = radar.get(item_id)
+        if not rit:
+            await q.answer("Radar item not found.", show_alert=True)
+            return
+        label = rit.get("headline") or rit.get("title") or rit.get("url")
+        await context.bot.send_message(q.message.chat_id,
+            f"📡 Turning radar item into a signal draft: {label}…")
+        notes = " ".join(p for p in (rit.get("title"), rit.get("headline"), rit.get("why")) if p)
+        await _draft_signal_from(rit.get("source") or "radar",
+                                 rit.get("title") or rit.get("headline") or "Radar item",
+                                 rit.get("url") or "", notes, q.message.chat_id, context)
+        return
+
     if action in ("saveins", "delins", "usedins"):
         ins = store.get_insight(item_id)
         if not ins:
@@ -215,6 +229,64 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await job_digest(context)
 
+
+URL_RE = __import__("re").compile(r"https?://\S+")
+
+
+async def _draft_signal_from(source, title, url, notes, chat_id, context):
+    """Shared path for manual suggestions: store as item, force-draft, send the
+    standard signal card (Publish / Edit / Skip -> Social pack)."""
+    import asyncio, time as _t
+    page = await asyncio.to_thread(sources.fetch_page_text, url) if url else ""
+    raw_summary = (notes or "").strip()
+    if page:
+        raw_summary += "\n\nPage extract: " + page
+    raw_summary = raw_summary[:3000]
+    key = url or f"manual:{title[:60]}:{int(_t.time())}"
+    existing = store.get_by_url(key)
+    if existing:
+        item_id = existing["id"]
+        # refresh the summary if the new paste carries more material
+        if len(raw_summary) > len(existing.get("raw_summary") or ""):
+            with store._conn() as c:
+                c.execute("UPDATE items SET raw_summary=? WHERE id=?", (raw_summary, item_id))
+    else:
+        item_id = store.add_item(source, title, key, "", raw_summary)
+        if not item_id:
+            existing = store.get_by_url(key)
+            item_id = existing["id"] if existing else None
+    if not item_id:
+        await context.bot.send_message(chat_id, "Could not store the suggestion — check logs.")
+        return
+    venues = await asyncio.to_thread(sources.load_index_venues)
+    item = store.get(item_id)
+    llm = await asyncio.to_thread(filter_llm.assess, item, venues, True)
+    if not llm or not llm.get("title"):
+        await context.bot.send_message(chat_id, "Drafting failed — try again or check logs.")
+        return
+    llm["include"] = True
+    store.set_llm(item_id, llm, "pending")
+    await context.bot.send_message(chat_id, _card_text(store.get(item_id), llm),
+        parse_mode="HTML", reply_markup=_card_kb(item_id), disable_web_page_preview=True)
+
+
+async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.partition(" ")[2].strip()
+    if not text:
+        await update.message.reply_text(
+            "Usage: /signal <paste> — a URL, a copied radar entry, or any text.\n"
+            "It becomes a pending signal card with the normal Publish / Edit / Skip flow.")
+        return
+    await update.message.reply_text("📡 Drafting a signal from your paste…")
+    m = URL_RE.search(text)
+    url = m.group(0).rstrip(".,)>]»\"'") if m else ""
+    body = URL_RE.sub(" ", text)
+    lines = [l.strip(" •·–—-") for l in body.splitlines() if l.strip(" •·–—-")]
+    title = (lines[0] if lines else (url or "Suggested signal"))[:300]
+    notes = " ".join(lines)[:1500]
+    await _draft_signal_from("manual", title, url, notes,
+                             update.message.chat_id, context)
+
 async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Fetching feeds…")
     await job_fetch_and_filter(context)
@@ -327,22 +399,25 @@ async def _send_radar(chat_id, context):
         await context.bot.send_message(chat_id, "🛰 Radar: nothing new this week.")
         return
     header = (f"🛰 <b>Radar</b> — {len(items)} item(s) worth knowing "
-              f"(private, never published):\n\n")
-    chunks, current = [], header
+              f"(private — ➕ turns one into a signal candidate):\n\n")
+    chunks, current, rows = [], header, []
     for it in items:
         headline = _html.escape(it.get("headline") or it.get("title") or "")
         detail = _html.escape((it.get("why") or "")[:600])
         entry = (f"• <a href=\"{it['url']}\"><b>{headline}</b></a>\n"
                  f"{detail}\n\n")
-        if len(current) + len(entry) > TG_LIMIT:
-            chunks.append(current)
-            current = ""
+        if len(current) + len(entry) > TG_LIMIT or len(rows) >= 12:
+            chunks.append((current, rows))
+            current, rows = "", []
         current += entry
+        label = (it.get("headline") or it.get("title") or "")[:34]
+        rows.append([InlineKeyboardButton(f"➕ {label}", callback_data=f"rad2sig:{it['id']}")])
     if current.strip():
-        chunks.append(current)
-    for chunk in chunks:
-        await context.bot.send_message(chat_id, chunk.rstrip(),
-            parse_mode="HTML", disable_web_page_preview=True)
+        chunks.append((current, rows))
+    for text, btn_rows in chunks:
+        await context.bot.send_message(chat_id, text.rstrip(),
+            parse_mode="HTML", disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup(btn_rows) if btn_rows else None)
     radar.mark_sent([it["id"] for it in items])
 
 
@@ -407,6 +482,8 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 /fetch — pull the trade feeds now (also runs automatically every 6h)
 /digest — show pending signal candidates (also arrives daily at 08:00)
 /rejected — last 15 rejected items with reasons, ♻️ to override
+/signal &lt;paste&gt; — suggest something yourself: a URL, a copied radar entry, or
+any text → becomes a pending signal card with the normal flow
 /stats — counts by status
 
 <b>Publishing</b>
@@ -420,6 +497,8 @@ After publishing: 📣 Social pack — card image + Instagram and LinkedIn capti
 
 <b>Radar (private — never published)</b>
 /radar — scan science/regulatory feeds now; weekly digest arrives Sundays 09:00
+Each radar item carries a ➕ button — tap it to promote the item into a
+signal candidate (drafted, then the usual Publish / Edit / Skip)
 Covers: longevity trials, therapy evidence shifts, psychedelic medicine access,
 diagnostics, regulatory moves
 
@@ -499,6 +578,7 @@ def main():
     app.add_handler(CommandHandler("fetch", cmd_fetch))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("rejected", cmd_rejected))
+    app.add_handler(CommandHandler("signal", cmd_signal))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("capture", cmd_capture))
     app.add_handler(CommandHandler("compile", cmd_compile))

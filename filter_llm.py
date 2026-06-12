@@ -39,13 +39,17 @@ def _parse(text: str) -> dict | None:
         except Exception:
             return None
 
-def assess(item: dict, index_venues: list[str]) -> dict | None:
+def assess(item: dict, index_venues: list[str], forced: bool = False) -> dict | None:
     system = CRITERIA + "\n\n" + OUTPUT_SPEC
     venues = ", ".join(index_venues) if index_venues else "(index list unavailable)"
     user = (f"INDEX VENUES: {venues}\n\n"
             f"NEWS ITEM\nSource: {item['source']}\nTitle: {item['title']}\n"
             f"URL: {item['url']}\nPublished: {item['published']}\n"
             f"Summary: {item['raw_summary']}")
+    if forced:
+        user += ("\n\nEDITOR NOTE: The editor has manually suggested this item for "
+                 "publication. Set include=true and produce the complete signal draft "
+                 "with every field filled, based on the material above.")
     try:
         return _parse(_call_llm(system, user))
     except Exception as ex:
