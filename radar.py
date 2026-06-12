@@ -3,7 +3,7 @@ Telegram-only — never published to the site."""
 import logging, re, sqlite3, time
 import feedparser, requests
 
-from config import RADAR_FEEDS, DB_PATH
+from config import RADAR_FEEDS, RADAR_MAX_AGE_DAYS, DB_PATH
 from filter_llm import _call_llm, _parse
 from store import _conn, hash_url
 
@@ -73,9 +73,22 @@ def _clean(html, limit=900):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()[:limit]
 
 
+def _entry_ts(e):
+    """Best-effort published timestamp from a feed entry, else None."""
+    for attr in ("published_parsed", "updated_parsed"):
+        t = getattr(e, attr, None)
+        if t:
+            try:
+                return int(time.mktime(t))
+            except Exception:
+                pass
+    return None
+
+
 def fetch_and_filter() -> dict:
     """Pull radar feeds, filter, store. Returns counts for diagnostics."""
-    stats = {"scanned": 0, "kept": 0, "excluded": 0, "errors": 0, "feed_fail": 0}
+    stats = {"scanned": 0, "kept": 0, "excluded": 0, "old": 0, "errors": 0, "feed_fail": 0}
+    cutoff = int(time.time()) - RADAR_MAX_AGE_DAYS * 86400
     for source, url in RADAR_FEEDS.items():
         try:
             feed = feedparser.parse(requests.get(url, headers=UA, timeout=30).content)
@@ -88,6 +101,17 @@ def fetch_and_filter() -> dict:
                 with _conn() as c:
                     if c.execute("SELECT 1 FROM radar_items WHERE url_hash=?", (h,)).fetchone():
                         continue
+                ts = _entry_ts(e)
+                if ts and ts < cutoff:
+                    # Too old: remember it (so it never re-scans) but skip the LLM entirely.
+                    with _conn() as c:
+                        c.execute("""INSERT INTO radar_items
+                            (url_hash, source, title, url, headline, why, status, created_at)
+                            VALUES (?,?,?,?,?,?,?,?)""",
+                            (h, source, title, link, title, "skipped: older than cutoff",
+                             "old", int(time.time())))
+                    stats["old"] += 1
+                    continue
                 stats["scanned"] += 1
                 summary = _clean(getattr(e, "summary", "") or getattr(e, "description", ""))
                 try:

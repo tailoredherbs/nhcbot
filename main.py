@@ -435,8 +435,8 @@ async def cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = await asyncio.to_thread(radar.fetch_and_filter)
     await update.message.reply_text(
         f"🛰 Scan: {stats['scanned']} new · {stats['kept']} kept · "
-        f"{stats['excluded']} excluded · {stats['errors']} filter errors · "
-        f"{stats['feed_fail']} feeds failed")
+        f"{stats['excluded']} excluded · {stats.get('old', 0)} too old · "
+        f"{stats['errors']} filter errors · {stats['feed_fail']} feeds failed")
     await _send_radar(update.message.chat_id, context)
 
 
