@@ -10,6 +10,26 @@ from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+
+class _RedactSecrets(logging.Filter):
+    """Prevent credentials embedded in third-party URLs from reaching logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_TOKEN in message:
+            record.msg = message.replace(TELEGRAM_BOT_TOKEN, "<redacted>")
+            record.args = ()
+        return True
+
+
+for handler in logging.getLogger().handlers:
+    handler.addFilter(_RedactSecrets())
+
+# httpx logs every Telegram polling request at INFO and includes the bot token
+# in the URL. Keep application INFO logs while only surfacing HTTP failures.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
 AWAITING_EDIT: dict[int, int] = {}  # chat_id -> item_id
 PENDING_REPORT: dict[int, dict] = {}  # chat_id -> drafted report

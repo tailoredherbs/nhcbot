@@ -7,12 +7,22 @@ from editorial import CRITERIA, OUTPUT_SPEC
 
 log = logging.getLogger("filter")
 
+# Preserve deployments that saved the repository's former default as an
+# environment variable. Anthropic removed that snapshot from the API.
+_ANTHROPIC_MODEL_ALIASES = {
+    "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+}
+ANTHROPIC_REQUEST_MODEL = _ANTHROPIC_MODEL_ALIASES.get(ANTHROPIC_MODEL, ANTHROPIC_MODEL)
+if ANTHROPIC_REQUEST_MODEL != ANTHROPIC_MODEL:
+    log.warning("Anthropic model %s is retired; using %s",
+                ANTHROPIC_MODEL, ANTHROPIC_REQUEST_MODEL)
+
 def _call_llm(system: str, user: str, max_tokens: int = 1200, temperature: float = 0.2) -> str:
     if ANTHROPIC_API_KEY:
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": ANTHROPIC_MODEL, "max_tokens": max_tokens, "temperature": temperature, "system": system,
+            json={"model": ANTHROPIC_REQUEST_MODEL, "max_tokens": max_tokens, "temperature": temperature, "system": system,
                   "messages": [{"role": "user", "content": user}]}, timeout=90)
         if r.status_code >= 400:
             raise RuntimeError(f"Anthropic API {r.status_code}: {r.text[:300]}")

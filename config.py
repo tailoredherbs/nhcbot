@@ -10,7 +10,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "tailoredherbs/new-health-club")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 # --- Behaviour ---
 DB_PATH = os.environ.get("DB_PATH", "/data/nhc.db")     # attach a Railway volume at /data
