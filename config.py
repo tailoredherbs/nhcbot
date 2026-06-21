@@ -23,13 +23,13 @@ SITE_URL = os.environ.get("SITE_URL", "https://thenewhealthclubs.com")
 # --- Sources ---
 # Run discover_feeds.py once to verify/correct these URLs, then update here.
 FEEDS = {
-    "HCM (Health Club Management)": "https://www.healthclubmanagement.co.uk/rss",
-    "Spa Business": "https://www.spabusiness.com/rss",
     "Athletech News": "https://athletechnews.com/feed/",
     "American Spa": "https://www.americanspa.com/rss.xml",
-    "Welltodo": "https://www.welltodoglobal.com/feed/",
     "Longevity.Technology": "https://longevity.technology/feed/",
-    "Spa Executive": "https://spaexecutive.com/feed/",
+    "Industry publication watch": "https://news.google.com/rss/search?q=%28site%3Aspabusiness.com+OR+site%3Ahealthclubmanagement.co.uk%29+%28wellness+OR+spa+OR+club+OR+retreat%29&hl=en-US&gl=US&ceid=US%3Aen",
+    "Premium wellness openings": "https://news.google.com/rss/search?q=%28%22wellness+club%22+OR+%22wellness+space%22+OR+%22private+members+club%22%29+%28opening+OR+opens+OR+launches+OR+expands%29&hl=en-US&gl=US&ceid=US%3Aen",
+    "Retreat and destination watch": "https://news.google.com/rss/search?q=%28%22wellness+retreat%22+OR+%22destination+spa%22%29+%28opening+OR+launches+OR+program+OR+expansion%29&hl=en-US&gl=US&ceid=US%3Aen",
+    "Longevity clinic watch": "https://news.google.com/rss/search?q=%28%22longevity+clinic%22+OR+%22longevity+center%22+OR+%22healthspan+clinic%22%29+%28opening+OR+launches+OR+expands+OR+partnership%29&hl=en-US&gl=US&ceid=US%3Aen",
 }
 
 # --- Private radar (never published): science & regulatory awareness for the desk ---

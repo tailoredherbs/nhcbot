@@ -39,23 +39,29 @@ PENDING_REPORT: dict[int, dict] = {}  # chat_id -> drafted report
 async def job_fetch_and_filter(context: ContextTypes.DEFAULT_TYPE):
     import asyncio
     new_ids = await asyncio.to_thread(sources.fetch_feeds)
-    if not new_ids:
-        log.info("Fetch: nothing new")
+    # Include items whose previous classification failed. They remain "new"
+    # until the LLM returns a valid verdict, rather than disappearing forever.
+    queued = await asyncio.to_thread(store.by_status, "new", 100)
+    if not queued:
+        log.info("Fetch: nothing queued (%d newly discovered)", len(new_ids))
         return
     venues = await asyncio.to_thread(sources.load_index_venues)
     accepted = 0
-    for item_id in new_ids:
-        item = store.get(item_id)
+    failed = 0
+    for item in queued:
+        item_id = item["id"]
         llm = await asyncio.to_thread(filter_llm.assess, item, venues)
         if not llm:
-            store.set_status(item_id, "rejected")
+            failed += 1
+            log.warning("Classification incomplete for item %s; queued for retry", item_id)
             continue
         if llm.get("include"):
             store.set_llm(item_id, llm, "pending")
             accepted += 1
         else:
             store.set_llm(item_id, llm, "rejected")
-    log.info("Fetch: %d new, %d pending review", len(new_ids), accepted)
+    log.info("Fetch: %d discovered, %d processed, %d pending review, %d retrying",
+             len(new_ids), len(queued) - failed, accepted, failed)
 
 
 def _card_text(item, llm):
@@ -139,7 +145,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not item:
             await q.edit_message_text("Item not found.")
             return
-        llm = json.loads(item["llm"])
+        llm = json.loads(item["llm"]) if item.get("llm") else {}
 
     if action == "skip":
         store.set_status(item_id, "skipped")
@@ -170,8 +176,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(q.message.chat_id, f"Social pack failed: {ex}")
 
     elif action == "rescue":
+        import asyncio
         await q.edit_message_text(f"♻️ Rescuing: {item['title'][:80]}… drafting signal.")
-        new_llm = filter_llm.revise(item, "The editor has overridden the rejection. Set include=true and produce the complete signal draft with all fields, based on the source summary.")
+        if item.get("llm"):
+            new_llm = await asyncio.to_thread(
+                filter_llm.revise, item,
+                "The editor has overridden the rejection. Set include=true and produce "
+                "the complete signal draft with all fields, based on the source summary.")
+        else:
+            venues = await asyncio.to_thread(sources.load_index_venues)
+            new_llm = await asyncio.to_thread(filter_llm.assess, item, venues, True)
         if new_llm and new_llm.get("title"):
             store.set_llm(item_id, new_llm, "pending")
             await context.bot.send_message(q.message.chat_id, _card_text(store.get(item_id), new_llm),
@@ -505,6 +519,7 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 /signal &lt;paste&gt; — suggest something yourself: a URL, a copied radar entry, or
 any text → becomes a pending signal card with the normal flow
 /stats — counts by status
+/health — show which publication and venue-news sources are working
 
 <b>Publishing</b>
 On each signal card: ✅ Publish (commits to the site) · ✏️ Edit (reply with an
@@ -574,6 +589,23 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 " + " · ".join(f"{k}: {v}" for k, v in sorted(c.items())) if c else "Empty.")
 
 
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = store.source_health()
+    if not rows:
+        await update.message.reply_text("No source checks yet — run /fetch first.")
+        return
+    tz = zoneinfo.ZoneInfo(TZ)
+    lines = ["🩺 Source health"]
+    for row in rows:
+        checked = datetime.datetime.fromtimestamp(row["checked_at"], tz).strftime("%d %b %H:%M")
+        if row["ok"]:
+            lines.append(f"✅ {row['source']} — {row['entries']} found, "
+                         f"{row['new_items']} new · {checked}")
+        else:
+            lines.append(f"❌ {row['source']} — {row['detail'][:100]} · {checked}")
+    await update.message.reply_text("\n".join(lines), disable_web_page_preview=True)
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled exception:", exc_info=context.error)
     chat_id = None
@@ -589,6 +621,9 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     store.init()
+    recovered = store.requeue_failed()
+    if recovered:
+        log.warning("Recovered %d items whose classification previously failed", recovered)
     store.init_insights()
     radar.init()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -597,6 +632,7 @@ def main():
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("rejected", cmd_rejected))
     app.add_handler(CommandHandler("signal", cmd_signal))
     app.add_handler(CommandHandler("report", cmd_report))

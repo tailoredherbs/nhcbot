@@ -19,6 +19,23 @@ def init():
             llm TEXT,                    -- JSON from filter
             created_at INTEGER
         )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS source_health (
+            source TEXT PRIMARY KEY,
+            url TEXT,
+            ok INTEGER,
+            entries INTEGER,
+            new_items INTEGER,
+            detail TEXT,
+            checked_at INTEGER
+        )""")
+
+
+def requeue_failed() -> int:
+    """Recover items rejected only because classification never completed."""
+    with _conn() as c:
+        cur = c.execute("""UPDATE items SET status='new'
+            WHERE status='rejected' AND (llm IS NULL OR llm='')""")
+        return cur.rowcount
 
 def hash_url(url: str) -> str:
     return hashlib.sha256(url.strip().lower().encode()).hexdigest()[:24]
@@ -59,6 +76,25 @@ def counts():
     with _conn() as c:
         return {r["status"]: r["n"] for r in c.execute(
             "SELECT status, COUNT(*) n FROM items GROUP BY status")}
+
+
+def record_source_health(source: str, url: str, ok: bool, entries: int,
+                         new_items: int, detail: str = ""):
+    with _conn() as c:
+        c.execute("""INSERT INTO source_health
+            (source, url, ok, entries, new_items, detail, checked_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(source) DO UPDATE SET
+                url=excluded.url, ok=excluded.ok, entries=excluded.entries,
+                new_items=excluded.new_items, detail=excluded.detail,
+                checked_at=excluded.checked_at""",
+            (source, url, int(ok), entries, new_items, detail[:300], int(time.time())))
+
+
+def source_health() -> list[dict]:
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM source_health ORDER BY ok ASC, source ASC")]
 
 def rejected_recent(limit=15):
     with _conn() as c:
