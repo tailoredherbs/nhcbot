@@ -157,6 +157,14 @@ def recent_by_source(source_query: str, limit=20):
                ORDER BY created_at DESC, id DESC LIMIT ?""",
             (f"%{source_query.lower()}%", limit))]
 
+def requeue_pending_source(source_query: str) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            """UPDATE items SET status='new'
+               WHERE status='pending' AND lower(source) LIKE ?""",
+            (f"%{source_query.lower()}%",))
+        return cur.rowcount
+
 def dedupe_pending(threshold=0.40) -> int:
     with _conn() as c:
         rows = [dict(r) for r in c.execute(

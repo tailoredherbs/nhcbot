@@ -350,10 +350,15 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     llm = {}
                 title = llm.get("title") or item["title"]
                 detail = llm.get("description") or llm.get("reason") or item.get("raw_summary") or ""
+                kb = None
+                if item["status"] == "pending":
+                    kb = _card_kb(item["id"])
+                elif item["status"] in {"archived", "rejected"}:
+                    kb = InlineKeyboardMarkup([[InlineKeyboardButton("♻️ Restore", callback_data=f"rescue:{item['id']}")]])
                 await update.message.reply_text(
                     f"<b>#{item['id']} [{item['status']}] {title[:120]}</b>\n"
                     f"<i>{item['source']}</i>\n{detail[:500]}\n{item['url']}",
-                    parse_mode="HTML", disable_web_page_preview=True)
+                    parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
             return
         c = store.counts()
         summary = " · ".join(f"{k}: {v}" for k, v in sorted(c.items())) if c else "empty"
@@ -397,6 +402,15 @@ async def cmd_dedupepending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🧹 Archived {n} near-duplicate pending candidate(s). "
         "Run /digest or /queue pending to review the cleaned queue.")
+
+
+async def cmd_regrokfilter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n = store.requeue_pending_source("grok")
+    processed, accepted, rejected, failed = await _classify_new_items(100)
+    await update.message.reply_text(
+        f"🧪 Re-filtered Grok pending items with stricter Signal rules. "
+        f"Requeued {n}; processed {processed - failed}; accepted {accepted}; "
+        f"rejected {rejected}; retrying {failed}.")
 
 
 URL_RE = __import__("re").compile(r"https?://\S+")
@@ -676,6 +690,7 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 /archive — recent older/skipped candidates that no longer clog the digest
 /queue — inspect pending/new/archive/rejected; /queue grok filters Grok
 /dedupepending — archive near-duplicate pending candidates
+/regrokfilter — re-run pending Grok items through stricter Signal filter
 /clearpending — archive all current pending candidates to reset the digest queue
 /resettest — testing only: delete unpublished scanner memory, keep published
 /rejected — last 15 rejected items with reasons, ♻️ to override
@@ -810,6 +825,7 @@ def main():
     app.add_handler(CommandHandler("archive", cmd_archive))
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("dedupepending", cmd_dedupepending))
+    app.add_handler(CommandHandler("regrokfilter", cmd_regrokfilter))
     app.add_handler(CommandHandler("clearpending", cmd_clearpending))
     app.add_handler(CommandHandler("resettest", cmd_resettest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))

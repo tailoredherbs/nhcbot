@@ -296,8 +296,10 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                     duplicates += 1
                     continue
                 venue = _plain(cand.get("venue"))
+                confidence = _plain(cand.get("confidence"))
                 summary = _clean(
-                    "Venue: %s. %s" % (venue, cand.get("summary") or ""),
+                    "Venue: %s. Confidence: %s. %s" % (
+                        venue, confidence or "unknown", cand.get("summary") or ""),
                     1600,
                 )
                 item_id = store.add_item(source, title, url, _plain(cand.get("published")), summary)
