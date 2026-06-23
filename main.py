@@ -814,7 +814,10 @@ After publishing: 📣 Social pack — card image + Instagram/LinkedIn captions
 
 <b>Secondary views</b>
 /queue pending — all pending candidates
-/queue grok — Grok leads across statuses
+/queue grok — all Grok leads across statuses, with buttons
+/queue pending grok — publishable Grok candidates
+/queue rejected grok — Grok leads rejected by the Signal filter
+/queue archived grok — Grok leads you skipped/cleaned up
 /queue rejected — rejected items worth reviewing
 /report — draft a market report from published Signals
 
