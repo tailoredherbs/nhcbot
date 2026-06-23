@@ -241,7 +241,12 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
 
 def fetch_feeds() -> list[int]:
     """Pull publication feeds and all-index venue news; return newly inserted ids."""
-    return _fetch_publications() + _fetch_index_news() + _fetch_grok_channel_scan()
+    return _fetch_publications() + _fetch_index_news()
+
+
+def fetch_grok_channels() -> list[int]:
+    """Run the slower optional Grok scan over venue websites/social channels."""
+    return _fetch_grok_channel_scan()
 
 def load_index_venues() -> list[str]:
     """Venue names from the live site, used for on-index tagging in the LLM filter."""

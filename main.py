@@ -37,15 +37,13 @@ PENDING_REPORT: dict[int, dict] = {}  # chat_id -> drafted report
 
 
 # ---------- jobs ----------
-async def job_fetch_and_filter(context: ContextTypes.DEFAULT_TYPE):
-    import asyncio
-    new_ids = await asyncio.to_thread(sources.fetch_feeds)
+async def _classify_new_items(limit: int = 100) -> tuple[int, int, int]:
     # Include items whose previous classification failed. They remain "new"
     # until the LLM returns a valid verdict, rather than disappearing forever.
-    queued = await asyncio.to_thread(store.by_status, "new", 100)
+    import asyncio
+    queued = await asyncio.to_thread(store.by_status, "new", limit)
     if not queued:
-        log.info("Fetch: nothing queued (%d newly discovered)", len(new_ids))
-        return
+        return 0, 0, 0
     venues = await asyncio.to_thread(sources.load_index_venues)
     accepted = 0
     failed = 0
@@ -61,8 +59,18 @@ async def job_fetch_and_filter(context: ContextTypes.DEFAULT_TYPE):
             accepted += 1
         else:
             store.set_llm(item_id, llm, "rejected")
+    return len(queued), accepted, failed
+
+
+async def job_fetch_and_filter(context: ContextTypes.DEFAULT_TYPE):
+    import asyncio
+    new_ids = await asyncio.to_thread(sources.fetch_feeds)
+    processed, accepted, failed = await _classify_new_items(100)
+    if not processed:
+        log.info("Fetch: nothing queued (%d newly discovered)", len(new_ids))
+        return
     log.info("Fetch: %d discovered, %d processed, %d pending review, %d retrying",
-             len(new_ids), len(queued) - failed, accepted, failed)
+             len(new_ids), processed - failed, accepted, failed)
 
 
 def _card_text(item, llm):
@@ -100,7 +108,10 @@ async def job_digest(context: ContextTypes.DEFAULT_TYPE):
 # ---------- handlers ----------
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception as ex:
+        log.info("Ignoring stale Telegram button answer: %s", ex)
     action, item_id = q.data.split(":")
     item_id = int(item_id)
     if action in ("seedins", "draftins"):
@@ -328,6 +339,20 @@ async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = store.counts()
     await update.message.reply_text(f"Done. Pending: {c.get('pending', 0)}")
 
+
+async def cmd_grok(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import asyncio
+    await update.message.reply_text(
+        "🛰 Running the slower Grok venue-channel scan… this can take several minutes.")
+    new_ids = await asyncio.to_thread(sources.fetch_grok_channels)
+    processed, accepted, failed = await _classify_new_items(100)
+    c = store.counts()
+    await update.message.reply_text(
+        f"Done. Grok found {len(new_ids)} new item(s). "
+        f"Processed {processed - failed}; accepted {accepted}; retrying {failed}. "
+        f"Pending: {c.get('pending', 0)}")
+
+
 async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = store.rejected_recent(15)
     if not items:
@@ -515,6 +540,7 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 
 <b>News flow</b>
 /fetch — pull the trade feeds now (also runs automatically every 6h)
+/grok — slower deep scan across venue websites/social channels
 /digest — show pending signal candidates (also arrives daily at 08:00)
 /rejected — last 15 rejected items with reasons, ♻️ to override
 /signal &lt;paste&gt; — suggest something yourself: a URL, a copied radar entry, or
@@ -621,6 +647,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled exception:", exc_info=context.error)
+    if "Query is too old" in str(context.error):
+        return
     chat_id = None
     if isinstance(update, Update) and update.effective_chat:
         chat_id = update.effective_chat.id
@@ -644,6 +672,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))
+    app.add_handler(CommandHandler("grok", cmd_grok))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("rejected", cmd_rejected))
