@@ -23,6 +23,7 @@ MAX_ITEMS_PER_DIGEST = int(os.environ.get("MAX_ITEMS_PER_DIGEST", "15"))
 SITE_URL = os.environ.get("SITE_URL", "https://thenewhealthclubs.com")
 ENABLE_GROK_CHANNEL_SCAN = os.environ.get("ENABLE_GROK_CHANNEL_SCAN", "").lower() in ("1", "true", "yes")
 GROK_CHANNEL_BATCH_SIZE = int(os.environ.get("GROK_CHANNEL_BATCH_SIZE", "8"))
+PENDING_ARCHIVE_DAYS = int(os.environ.get("PENDING_ARCHIVE_DAYS", "28"))
 
 # --- Sources ---
 # Run discover_feeds.py once to verify/correct these URLs, then update here.

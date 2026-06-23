@@ -8,7 +8,8 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 import store, sources, filter_llm, publisher, socials, reports_gen, capture, radar
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST,
-                    ENABLE_GROK_CHANNEL_SCAN, GROK_MODEL, XAI_API_KEY)
+                    ENABLE_GROK_CHANNEL_SCAN, GROK_MODEL, XAI_API_KEY,
+                    PENDING_ARCHIVE_DAYS)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -92,12 +93,18 @@ def _card_kb(item_id):
 
 
 async def job_digest(context: ContextTypes.DEFAULT_TYPE):
-    pending = store.by_status("pending", MAX_ITEMS_PER_DIGEST)
+    archived = store.archive_old_pending(PENDING_ARCHIVE_DAYS)
+    pending = store.pending_fresh(MAX_ITEMS_PER_DIGEST, PENDING_ARCHIVE_DAYS)
     if not pending:
-        await context.bot.send_message(TELEGRAM_CHAT_ID, "📭 No new signals today.")
+        msg = "📭 No fresh signals today."
+        if archived:
+            msg += f" Archived {archived} older candidate(s)."
+        await context.bot.send_message(TELEGRAM_CHAT_ID, msg)
         return
+    suffix = f" · archived {archived} old" if archived else ""
     await context.bot.send_message(TELEGRAM_CHAT_ID,
-        f"📡 <b>NHC Daily Digest</b> — {len(pending)} candidate signal(s)", parse_mode="HTML")
+        f"📡 <b>NHC Daily Digest</b> — {len(pending)} fresh candidate signal(s){suffix}",
+        parse_mode="HTML")
     for item in pending:
         llm = json.loads(item["llm"])
         await context.bot.send_message(TELEGRAM_CHAT_ID, _card_text(item, llm),
@@ -160,8 +167,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         llm = json.loads(item["llm"]) if item.get("llm") else {}
 
     if action == "skip":
-        store.set_status(item_id, "skipped")
-        await q.edit_message_text(f"❌ Skipped: {llm['title']}")
+        store.set_status(item_id, "archived")
+        await q.edit_message_text(f"🗄 Archived: {llm['title']}")
 
     elif action == "pub":
         try:
@@ -274,6 +281,38 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await job_digest(context)
+
+
+async def cmd_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    archived = store.archive_old_pending(PENDING_ARCHIVE_DAYS)
+    items = store.archived_recent(15)
+    if not items:
+        msg = "Archive is empty."
+        if archived:
+            msg = f"Archived {archived} older candidate(s), but archive is otherwise empty."
+        await update.message.reply_text(msg)
+        return
+    prefix = f"🗄 Archive — last {len(items)} candidate(s)"
+    if archived:
+        prefix += f" · just archived {archived} old pending"
+    await update.message.reply_text(prefix)
+    for item in items:
+        try:
+            llm = json.loads(item["llm"]) if item["llm"] else {}
+        except Exception:
+            llm = {}
+        title = llm.get("title") or item["title"]
+        reason = llm.get("description") or llm.get("reason") or item.get("raw_summary") or ""
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("♻️ Restore", callback_data=f"rescue:{item['id']}")]])
+        await update.message.reply_text(
+            f"<b>{title[:120]}</b>\n<i>{item['source']}</i>\n{reason[:500]}\n{item['url']}",
+            parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+
+
+async def cmd_clearpending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n = store.archive_all_pending()
+    await update.message.reply_text(
+        f"🗄 Archived {n} pending candidate(s). New fetches will start with a clean digest queue.")
 
 
 URL_RE = __import__("re").compile(r"https?://\S+")
@@ -542,6 +581,8 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 /fetch — pull the trade feeds now (also runs automatically every 6h)
 /grok — slower deep scan across venue websites/social channels
 /digest — show pending signal candidates (also arrives daily at 08:00)
+/archive — recent older/skipped candidates that no longer clog the digest
+/clearpending — archive all current pending candidates to reset the digest queue
 /rejected — last 15 rejected items with reasons, ♻️ to override
 /signal &lt;paste&gt; — suggest something yourself: a URL, a copied radar entry, or
 any text → becomes a pending signal card with the normal flow
@@ -671,6 +712,8 @@ def main():
     app.add_error_handler(on_error)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(CommandHandler("digest", cmd_digest))
+    app.add_handler(CommandHandler("archive", cmd_archive))
+    app.add_handler(CommandHandler("clearpending", cmd_clearpending))
     app.add_handler(CommandHandler("fetch", cmd_fetch))
     app.add_handler(CommandHandler("grok", cmd_grok))
     app.add_handler(CommandHandler("stats", cmd_stats))

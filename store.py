@@ -15,7 +15,7 @@ def init():
             url_hash TEXT UNIQUE,
             source TEXT, title TEXT, url TEXT, published TEXT,
             raw_summary TEXT,
-            status TEXT DEFAULT 'new',   -- new|rejected|pending|published|skipped
+            status TEXT DEFAULT 'new',   -- new|rejected|pending|published|skipped|archived
             llm TEXT,                    -- JSON from filter
             created_at INTEGER
         )""")
@@ -71,6 +71,32 @@ def by_status(status, limit=50):
     with _conn() as c:
         return [dict(r) for r in c.execute(
             "SELECT * FROM items WHERE status=? ORDER BY id ASC LIMIT ?", (status, limit))]
+
+def pending_fresh(limit=50, max_age_days=28):
+    cutoff = int(time.time()) - int(max_age_days * 86400)
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT * FROM items
+               WHERE status='pending' AND created_at>=?
+               ORDER BY id DESC LIMIT ?""", (cutoff, limit))]
+
+def archive_old_pending(max_age_days=28) -> int:
+    cutoff = int(time.time()) - int(max_age_days * 86400)
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE items SET status='archived' WHERE status='pending' AND created_at<?",
+            (cutoff,))
+        return cur.rowcount
+
+def archived_recent(limit=25):
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM items WHERE status='archived' ORDER BY id DESC LIMIT ?", (limit,))]
+
+def archive_all_pending() -> int:
+    with _conn() as c:
+        cur = c.execute("UPDATE items SET status='archived' WHERE status='pending'")
+        return cur.rowcount
 
 def counts():
     with _conn() as c:
