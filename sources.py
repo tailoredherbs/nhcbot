@@ -205,7 +205,7 @@ def _fetch_index_news(batch_size: int = 8) -> list[int]:
     for start in range(0, len(names), batch_size):
         batch = names[start:start + batch_size]
         venue_terms = " OR ".join(f'"{name}"' for name in batch)
-        query = f"({venue_terms}) {change_terms}"
+        query = f"({venue_terms}) {change_terms} when:{SIGNAL_MAX_AGE_DAYS}d"
         url = ("https://news.google.com/rss/search?q=" + quote_plus(query)
                + "&hl=en-US&gl=US&ceid=US:en")
         try:

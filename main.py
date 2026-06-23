@@ -432,6 +432,18 @@ async def cmd_datecleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"(cutoff: {SIGNAL_MAX_AGE_DAYS} days).")
 
 
+async def cmd_clearnews(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n_index = store.archive_pending_source("Index venue news")
+    n_industry = store.archive_pending_source("Industry publication watch")
+    n_openings = store.archive_pending_source("Premium wellness openings")
+    n_retreats = store.archive_pending_source("Retreat and destination watch")
+    n_longevity = store.archive_pending_source("Longevity clinic watch")
+    total = n_index + n_industry + n_openings + n_retreats + n_longevity
+    await update.message.reply_text(
+        f"🧹 Archived {total} pending Google News candidate(s). "
+        "Future Google scans now use an explicit 45-day search window.")
+
+
 async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🌅 Morning scan started: feeds → Grok scout → stricter Grok filter → dedupe → digest.")
@@ -813,6 +825,7 @@ After publishing: 📣 Social pack — card image + Instagram/LinkedIn captions
 /dedupepending — archive near-duplicates
 /regrokfilter — re-filter pending Grok items
 /datecleanup — archive pending items with old/unknown evidence dates
+/clearnews — archive current pending Google News candidates
 /archive — recent archived candidates
 /clearpending — archive all pending candidates
 /resettest — testing only: delete unpublished scanner memory, keep published
@@ -927,6 +940,7 @@ def main():
     app.add_handler(CommandHandler("dedupepending", cmd_dedupepending))
     app.add_handler(CommandHandler("regrokfilter", cmd_regrokfilter))
     app.add_handler(CommandHandler("datecleanup", cmd_datecleanup))
+    app.add_handler(CommandHandler("clearnews", cmd_clearnews))
     app.add_handler(CommandHandler("clearpending", cmd_clearpending))
     app.add_handler(CommandHandler("resettest", cmd_resettest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))

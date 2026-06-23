@@ -32,10 +32,10 @@ FEEDS = {
     "Athletech News": "https://athletechnews.com/feed/",
     "American Spa": "https://www.americanspa.com/rss.xml",
     "Longevity.Technology": "https://longevity.technology/feed/",
-    "Industry publication watch": "https://news.google.com/rss/search?q=%28site%3Aspabusiness.com+OR+site%3Ahealthclubmanagement.co.uk%29+%28opening+OR+opens+OR+launches+OR+expands+OR+resort+OR+retreat+OR+spa+OR+wellness%29+-%22job+vacancy%22+-%22press+release%22+-%22lighting+design%22+-%22equipment%22&hl=en-US&gl=US&ceid=US%3Aen",
-    "Premium wellness openings": "https://news.google.com/rss/search?q=%28%22wellness+club%22+OR+%22wellness+space%22+OR+%22private+members+club%22%29+%28opening+OR+opens+OR+launches+OR+expands%29&hl=en-US&gl=US&ceid=US%3Aen",
-    "Retreat and destination watch": "https://news.google.com/rss/search?q=%28%22wellness+retreat%22+OR+%22destination+spa%22%29+%28opening+OR+launches+OR+program+OR+expansion%29&hl=en-US&gl=US&ceid=US%3Aen",
-    "Longevity clinic watch": "https://news.google.com/rss/search?q=%28%22longevity+clinic%22+OR+%22longevity+center%22+OR+%22healthspan+clinic%22%29+%28opening+OR+launches+OR+expands+OR+partnership%29&hl=en-US&gl=US&ceid=US%3Aen",
+    "Industry publication watch": "https://news.google.com/rss/search?q=%28site%3Aspabusiness.com+OR+site%3Ahealthclubmanagement.co.uk%29+%28opening+OR+opens+OR+launches+OR+expands+OR+resort+OR+retreat+OR+spa+OR+wellness%29+when%3A45d+-%22job+vacancy%22+-%22press+release%22+-%22lighting+design%22+-%22equipment%22&hl=en-US&gl=US&ceid=US%3Aen",
+    "Premium wellness openings": "https://news.google.com/rss/search?q=%28%22wellness+club%22+OR+%22wellness+space%22+OR+%22private+members+club%22%29+%28opening+OR+opens+OR+launches+OR+expands%29+when%3A45d&hl=en-US&gl=US&ceid=US%3Aen",
+    "Retreat and destination watch": "https://news.google.com/rss/search?q=%28%22wellness+retreat%22+OR+%22destination+spa%22%29+%28opening+OR+launches+OR+program+OR+expansion%29+when%3A45d&hl=en-US&gl=US&ceid=US%3Aen",
+    "Longevity clinic watch": "https://news.google.com/rss/search?q=%28%22longevity+clinic%22+OR+%22longevity+center%22+OR+%22healthspan+clinic%22%29+%28opening+OR+launches+OR+expands+OR+partnership%29+when%3A45d&hl=en-US&gl=US&ceid=US%3Aen",
 }
 
 # --- Private radar (never published): science & regulatory awareness for the desk ---
