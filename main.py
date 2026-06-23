@@ -7,7 +7,8 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
 
 import store, sources, filter_llm, publisher, socials, reports_gen, capture, radar
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
-                    FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST)
+                    FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST,
+                    ENABLE_GROK_CHANNEL_SCAN, GROK_MODEL, XAI_API_KEY)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -592,7 +593,17 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = store.source_health()
     if not rows:
-        await update.message.reply_text("No source checks yet — run /fetch first.")
+        rows = []
+    grok_seen = any(row["source"] == "Grok venue channel scan" for row in rows)
+    grok_enabled = ENABLE_GROK_CHANNEL_SCAN and bool(XAI_API_KEY)
+    grok_config_line = (
+        f"{'✅' if grok_enabled else '⚪'} Grok venue channel scan — "
+        f"{'enabled' if ENABLE_GROK_CHANNEL_SCAN else 'disabled'} · "
+        f"{'key present' if XAI_API_KEY else 'missing XAI_API_KEY'} · {GROK_MODEL}"
+    )
+    if not rows:
+        await update.message.reply_text(
+            "No source checks yet — run /fetch first.\n" + grok_config_line)
         return
     tz = zoneinfo.ZoneInfo(TZ)
     lines = ["🩺 Source health"]
@@ -603,6 +614,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          f"{row['new_items']} new · {checked}")
         else:
             lines.append(f"❌ {row['source']} — {row['detail'][:100]} · {checked}")
+    if not grok_seen:
+        lines.append(grok_config_line)
     await update.message.reply_text("\n".join(lines), disable_web_page_preview=True)
 
 
