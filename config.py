@@ -9,8 +9,10 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "tailoredherbs/new-health-club")
 # --- LLM: set ONE of these ---
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4.3")
 
 # --- Behaviour ---
 DB_PATH = os.environ.get("DB_PATH", "/data/nhc.db")     # attach a Railway volume at /data
@@ -19,6 +21,8 @@ DIGEST_HOUR = int(os.environ.get("DIGEST_HOUR", "8"))   # daily digest at 08:00
 FETCH_EVERY_HOURS = int(os.environ.get("FETCH_EVERY_HOURS", "6"))
 MAX_ITEMS_PER_DIGEST = int(os.environ.get("MAX_ITEMS_PER_DIGEST", "15"))
 SITE_URL = os.environ.get("SITE_URL", "https://thenewhealthclubs.com")
+ENABLE_GROK_CHANNEL_SCAN = os.environ.get("ENABLE_GROK_CHANNEL_SCAN", "").lower() in ("1", "true", "yes")
+GROK_CHANNEL_BATCH_SIZE = int(os.environ.get("GROK_CHANNEL_BATCH_SIZE", "8"))
 
 # --- Sources ---
 # Run discover_feeds.py once to verify/correct these URLs, then update here.

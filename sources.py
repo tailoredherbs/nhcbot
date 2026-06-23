@@ -1,10 +1,11 @@
-"""Fetch publication feeds and news mentions for venues on the live index."""
-import logging, re
+"""Fetch publication feeds, news mentions, and venue-owned channel updates."""
+import json, logging, re
 from urllib.parse import quote_plus
 import feedparser
 import requests
 
-from config import FEEDS, SITE_URL
+from config import (ENABLE_GROK_CHANNEL_SCAN, FEEDS, GROK_CHANNEL_BATCH_SIZE,
+                    GROK_MODEL, SITE_URL, XAI_API_KEY)
 import store
 
 log = logging.getLogger("sources")
@@ -13,6 +14,39 @@ UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit
 def _clean(html: str, limit=1200) -> str:
     text = re.sub(r"<[^>]+>", " ", html or "")
     return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def _plain(value) -> str:
+    return str(value or "").strip()
+
+
+def _space_link(space: dict, key: str) -> str:
+    """Read links from both legacy top-level fields and newer links.* fields."""
+    links = space.get("links") or {}
+    return _plain(space.get(key) or links.get(key))
+
+
+def _instagram_url(handle: str) -> str:
+    handle = _plain(handle)
+    if not handle:
+        return ""
+    if handle.startswith("http://") or handle.startswith("https://"):
+        return handle
+    return "https://www.instagram.com/" + handle.lstrip("@").strip("/")
+
+
+def _json_from_text(text: str):
+    text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        start, end = text.find("["), text.rfind("]")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
 
 
 def _fetch_one(source: str, url: str, limit: int = 30,
@@ -60,6 +94,26 @@ def load_index_spaces() -> list[dict]:
     return resp.json()
 
 
+def load_index_channels() -> list[dict]:
+    """Venue names plus owned web/social channels from the live map export."""
+    channels = []
+    for s in load_index_spaces():
+        name = _plain(s.get("name") or s.get("title"))
+        website = _space_link(s, "website")
+        instagram = _space_link(s, "instagram")
+        if name and (website or instagram):
+            channels.append({
+                "name": name,
+                "area": _plain(s.get("area")),
+                "region": _plain(s.get("region")),
+                "category": _plain(s.get("category")),
+                "website": website,
+                "instagram": instagram,
+                "instagram_url": _instagram_url(instagram),
+            })
+    return channels
+
+
 def _fetch_index_news(batch_size: int = 8) -> list[int]:
     """Search recent news for every venue on the live index in small batches."""
     try:
@@ -92,9 +146,102 @@ def _fetch_index_news(batch_size: int = 8) -> list[int]:
     return new_ids
 
 
+def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[int]:
+    """Ask Grok to search public venue-owned channels for recent signal-worthy updates.
+
+    This is intentionally optional. Grok can browse/search public web pages, but it is
+    not a guaranteed Instagram data pipe; private/blocked Instagram content may not be
+    reachable. Returned candidates still go through the normal editorial LLM filter.
+    """
+    source = "Grok venue channel scan"
+    if not ENABLE_GROK_CHANNEL_SCAN:
+        store.record_source_health(source, "xAI disabled", True, 0, 0, "disabled")
+        return []
+    if not XAI_API_KEY:
+        store.record_source_health(source, "xAI", False, 0, 0, "missing XAI_API_KEY")
+        return []
+
+    try:
+        channels = load_index_channels()
+    except Exception as ex:
+        store.record_source_health(source, SITE_URL, False, 0, 0, str(ex))
+        log.error("Could not load index channels for Grok scan: %s", ex)
+        return []
+
+    if not channels:
+        store.record_source_health(source, f"{SITE_URL}/spaces-data.json", True, 0, 0,
+                                   "no website/instagram links exposed")
+        return []
+
+    new_ids, found, failures = [], 0, []
+    for start in range(0, len(channels), batch_size):
+        batch = channels[start:start + batch_size]
+        prompt = (
+            "You are scanning official venue-owned channels for The New Health Club.\n"
+            "Look for public updates from the last 45 days that would change the venue map: "
+            "openings, expansions, new programs, memberships, partnerships, closures, "
+            "leadership/medical-director moves, acquisitions, or pricing/model changes.\n"
+            "Use only public evidence from the listed website or Instagram pages. If an "
+            "Instagram page cannot be accessed, do not guess. Return only a JSON array. "
+            "Each item must have: title, url, published, summary, venue. If there are no "
+            "clear signal-worthy updates, return [].\n\nVENUES:\n"
+            + json.dumps(batch, ensure_ascii=False)
+        )
+        try:
+            r = requests.post(
+                "https://api.x.ai/v1/responses",
+                headers={"Authorization": f"Bearer {XAI_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={
+                    "model": GROK_MODEL,
+                    "input": [{"role": "user", "content": prompt}],
+                    "tools": [{"type": "web_search", "enable_image_understanding": True}],
+                },
+                timeout=120,
+            )
+            if r.status_code >= 400:
+                raise RuntimeError(f"xAI API {r.status_code}: {r.text[:300]}")
+            data = r.json()
+            text = data.get("output_text") or ""
+            if not text:
+                parts = []
+                for out in data.get("output", []):
+                    for content in out.get("content", []):
+                        if content.get("type") in ("output_text", "text"):
+                            parts.append(content.get("text", ""))
+                text = "\n".join(parts)
+            candidates = _json_from_text(text)
+            if isinstance(candidates, dict):
+                candidates = candidates.get("items", [])
+            for cand in candidates or []:
+                title = _clean(cand.get("title"), 300)
+                url = _plain(cand.get("url"))
+                if not title or not url or store.seen(url):
+                    continue
+                venue = _plain(cand.get("venue"))
+                summary = _clean(
+                    "Venue: %s. %s" % (venue, cand.get("summary") or ""),
+                    1600,
+                )
+                item_id = store.add_item(source, title, url, _plain(cand.get("published")), summary)
+                if item_id:
+                    new_ids.append(item_id)
+            found += len(candidates or [])
+        except Exception as ex:
+            failures.append(str(ex))
+
+    ok = not failures
+    detail = "ok" if ok else f"{len(failures)} batch(es) failed: {failures[0]}"
+    store.record_source_health(source, "xAI web_search over venue websites/Instagram",
+                               ok, found, len(new_ids), detail)
+    log.info("Grok venue channel scan: %d venues, %d candidates, %d new, %d failed batches",
+             len(channels), found, len(new_ids), len(failures))
+    return new_ids
+
+
 def fetch_feeds() -> list[int]:
     """Pull publication feeds and all-index venue news; return newly inserted ids."""
-    return _fetch_publications() + _fetch_index_news()
+    return _fetch_publications() + _fetch_index_news() + _fetch_grok_channel_scan()
 
 def load_index_venues() -> list[str]:
     """Venue names from the live site, used for on-index tagging in the LLM filter."""
