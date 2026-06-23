@@ -290,14 +290,14 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     archived = store.archive_old_pending(PENDING_ARCHIVE_DAYS)
-    items = store.archived_recent(15)
+    items = store.archived_recent(15, PENDING_ARCHIVE_DAYS)
     if not items:
         msg = "Archive is empty."
         if archived:
             msg = f"Archived {archived} older candidate(s), but archive is otherwise empty."
         await update.message.reply_text(msg)
         return
-    prefix = f"🗄 Archive — last {len(items)} candidate(s)"
+    prefix = f"🗄 Archive — last {len(items)} candidate(s) from {PENDING_ARCHIVE_DAYS}d"
     if archived:
         prefix += f" · just archived {archived} old pending"
     await update.message.reply_text(prefix)

@@ -1,11 +1,11 @@
 """Fetch publication feeds, news mentions, and venue-owned channel updates."""
-import json, logging, re
+import calendar, email.utils, json, logging, re, time
 from urllib.parse import quote_plus
 import feedparser
 import requests
 
 from config import (ENABLE_GROK_CHANNEL_SCAN, FEEDS, GROK_CHANNEL_BATCH_SIZE,
-                    GROK_MODEL, SITE_URL, XAI_API_KEY)
+                    GROK_MODEL, SIGNAL_MAX_AGE_DAYS, SITE_URL, XAI_API_KEY)
 import store
 
 log = logging.getLogger("sources")
@@ -49,16 +49,41 @@ def _json_from_text(text: str):
         raise
 
 
+def _published_ts(entry) -> int | None:
+    parsed = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+    if parsed:
+        return calendar.timegm(parsed)
+    raw = getattr(entry, "published", "") or getattr(entry, "updated", "")
+    if raw:
+        try:
+            return int(email.utils.parsedate_to_datetime(raw).timestamp())
+        except Exception:
+            return None
+    return None
+
+
+def _is_recent(entry, max_age_days: int = SIGNAL_MAX_AGE_DAYS) -> bool:
+    ts = _published_ts(entry)
+    if not ts:
+        # If a feed gives no date, keep it; the LLM/editor can still judge it.
+        return True
+    return ts >= int(time.time()) - int(max_age_days * 86400)
+
+
 def _fetch_one(source: str, url: str, limit: int = 30,
-               allow_empty: bool = False) -> tuple[list[int], int]:
-    """Fetch one RSS/Atom URL, insert unseen entries, and return ids + feed size."""
+               allow_empty: bool = False) -> tuple[list[int], int, int]:
+    """Fetch one RSS/Atom URL, insert unseen recent entries, and return ids + counts."""
     resp = requests.get(url, headers=UA, timeout=30)
     resp.raise_for_status()
     feed = feedparser.parse(resp.content)
     if not feed.entries and not allow_empty:
         raise RuntimeError("response contained no RSS/Atom entries")
     new_ids = []
+    old = 0
     for e in feed.entries[:limit]:
+        if not _is_recent(e):
+            old += 1
+            continue
         link = getattr(e, "link", "") or ""
         title = _clean(getattr(e, "title", ""), 300)
         if not link or not title or store.seen(link):
@@ -68,7 +93,7 @@ def _fetch_one(source: str, url: str, limit: int = 30,
         item_id = store.add_item(source, title, link, published, summary)
         if item_id:
             new_ids.append(item_id)
-    return new_ids, len(feed.entries)
+    return new_ids, len(feed.entries), old
 
 
 def _fetch_publications() -> list[int]:
@@ -76,11 +101,12 @@ def _fetch_publications() -> list[int]:
     for source, url in FEEDS.items():
         try:
             is_news_search = "news.google.com/rss/search" in url
-            ids, entries = _fetch_one(source, url, limit=15 if is_news_search else 30,
-                                      allow_empty=is_news_search)
+            ids, entries, old = _fetch_one(source, url, limit=15 if is_news_search else 30,
+                                           allow_empty=is_news_search)
             new_ids.extend(ids)
-            store.record_source_health(source, url, True, entries, len(ids), "ok")
-            log.info("%s: ok (%d entries, %d new)", source, entries, len(ids))
+            detail = f"ok; skipped {old} older than {SIGNAL_MAX_AGE_DAYS}d"
+            store.record_source_health(source, url, True, entries, len(ids), detail)
+            log.info("%s: ok (%d entries, %d new, %d old)", source, entries, len(ids), old)
         except Exception as ex:
             store.record_source_health(source, url, False, 0, 0, str(ex))
             log.error("Feed failed %s: %s", source, ex)
@@ -123,7 +149,7 @@ def _fetch_index_news(batch_size: int = 8) -> list[int]:
         log.error("Could not load index venues for news watch: %s", ex)
         return []
 
-    new_ids, total_entries, failures = [], 0, []
+    new_ids, total_entries, old_entries, failures = [], 0, 0, []
     change_terms = '(opening OR opens OR launch OR expansion OR partnership OR membership OR program OR retreat OR acquisition)'
     for start in range(0, len(names), batch_size):
         batch = names[start:start + batch_size]
@@ -132,17 +158,20 @@ def _fetch_index_news(batch_size: int = 8) -> list[int]:
         url = ("https://news.google.com/rss/search?q=" + quote_plus(query)
                + "&hl=en-US&gl=US&ceid=US:en")
         try:
-            ids, entries = _fetch_one("Index venue news", url, limit=8, allow_empty=True)
+            ids, entries, old = _fetch_one("Index venue news", url, limit=8, allow_empty=True)
             new_ids.extend(ids)
             total_entries += entries
+            old_entries += old
         except Exception as ex:
             failures.append(str(ex))
     ok = not failures
-    detail = "ok" if ok else f"{len(failures)} batch(es) failed: {failures[0]}"
+    detail = f"skipped {old_entries} older than {SIGNAL_MAX_AGE_DAYS}d"
+    if failures:
+        detail += f"; {len(failures)} batch(es) failed: {failures[0]}"
     store.record_source_health("Index venue news", f"{SITE_URL}/spaces-data.json",
                                ok, total_entries, len(new_ids), detail)
-    log.info("Index venue news: %d venues, %d results, %d new, %d failed batches",
-             len(names), total_entries, len(new_ids), len(failures))
+    log.info("Index venue news: %d venues, %d results, %d new, %d old, %d failed batches",
+             len(names), total_entries, len(new_ids), old_entries, len(failures))
     return new_ids
 
 
@@ -178,13 +207,17 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
         batch = channels[start:start + batch_size]
         prompt = (
             "You are scanning official venue-owned channels for The New Health Club.\n"
-            "Look for public updates from the last 45 days that would change the venue map: "
+            f"Look for public updates published in the last {SIGNAL_MAX_AGE_DAYS} days "
+            "that would change the venue map: "
             "openings, expansions, new programs, memberships, partnerships, closures, "
             "leadership/medical-director moves, acquisitions, or pricing/model changes.\n"
             "Use only public evidence from the listed website or Instagram pages. If an "
-            "Instagram page cannot be accessed, do not guess. Return only a JSON array. "
-            "Each item must have: title, url, published, summary, venue. If there are no "
-            "clear signal-worthy updates, return [].\n\nVENUES:\n"
+            "Instagram page cannot be accessed, do not guess. Do not include evergreen "
+            "service pages unless they explicitly show a recent announcement date. "
+            "A future opening date is not enough on its own; the announcement/reservation "
+            "evidence must be recent. Return only a JSON array. Each item must have: "
+            "title, url, published, summary, venue. If there are no clear signal-worthy "
+            "recent updates, return [].\n\nVENUES:\n"
             + json.dumps(batch, ensure_ascii=False)
         )
         try:

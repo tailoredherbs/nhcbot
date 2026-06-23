@@ -88,10 +88,13 @@ def archive_old_pending(max_age_days=28) -> int:
             (cutoff,))
         return cur.rowcount
 
-def archived_recent(limit=25):
+def archived_recent(limit=25, max_age_days=28):
+    cutoff = int(time.time()) - int(max_age_days * 86400)
     with _conn() as c:
         return [dict(r) for r in c.execute(
-            "SELECT * FROM items WHERE status='archived' ORDER BY id DESC LIMIT ?", (limit,))]
+            """SELECT * FROM items
+               WHERE status='archived' AND created_at>=?
+               ORDER BY created_at DESC, id DESC LIMIT ?""", (cutoff, limit))]
 
 def archive_all_pending() -> int:
     with _conn() as c:
