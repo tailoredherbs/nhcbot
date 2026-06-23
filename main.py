@@ -51,6 +51,11 @@ async def _classify_new_items(limit: int = 100) -> tuple[int, int, int, int]:
     failed = 0
     for item in queued:
         item_id = item["id"]
+        if store.item_is_stale(item, SIGNAL_MAX_AGE_DAYS, archive_unknown=True):
+            store.set_status(item_id, "archived")
+            rejected += 1
+            log.info("Archived stale/undated item before classification: %s", item["title"][:80])
+            continue
         llm = await asyncio.to_thread(filter_llm.assess, item, venues)
         if not llm:
             failed += 1

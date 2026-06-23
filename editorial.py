@@ -15,6 +15,12 @@ Do NOT include routine content/calendar/programming updates at an existing venue
 unless they introduce a new format, new location, new audience, new clinical layer,
 new membership model, major partnership, or meaningful repositioning.
 
+RECENCY RULE: Signals are a current feed. Reject items whose actual article/post/
+announcement evidence is older than about 45 days, even if Google News or another
+aggregator resurfaced it today. If the title/summary/body says the underlying
+announcement was in March, April, etc. and that is outside the recency window,
+set include=false. Future opening dates do not make an old announcement current.
+
 RING 1 - ALWAYS IN (venue-level news) across five categories (Longevity Sanctuaries,
 Execution Hubs / longevity clinics, Practitioner-Led Boutiques, Retreats, Clubs):
 - Openings, announced projects, expansions to new cities/properties

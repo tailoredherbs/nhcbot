@@ -140,18 +140,58 @@ def _published_text_ts(raw: str) -> int | None:
             pass
     return None
 
+_MONTH_RE = re.compile(
+    r"\b(january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\.?\s+(\d{1,2},?\s+)?(20\d{2})\b",
+    re.I,
+)
+_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7,
+    "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12,
+    "december": 12,
+}
+
+def _text_date_ts(text: str) -> int | None:
+    matches = list(_MONTH_RE.finditer(text or ""))
+    if not matches:
+        return None
+    latest = None
+    for m in matches:
+        month = _MONTHS.get(m.group(1).lower().rstrip("."))
+        day_text = (m.group(2) or "1").replace(",", "").strip()
+        year = int(m.group(3))
+        try:
+            day = int(day_text) if day_text else 1
+            ts = int(datetime.datetime(year, month, day, tzinfo=datetime.timezone.utc).timestamp())
+            latest = max(latest or ts, ts)
+        except Exception:
+            continue
+    return latest
+
+def item_is_stale(item: dict, max_age_days=45, archive_unknown=False) -> bool:
+    cutoff = int(time.time()) - int(max_age_days * 86400)
+    published_ts = _published_text_ts(item.get("published") or "")
+    text_ts = _text_date_ts(" ".join([
+        item.get("title") or "",
+        item.get("raw_summary") or "",
+    ]))
+    # If the story text itself says March/April/etc, trust that over a fresh
+    # Google News RSS timestamp.
+    evidence_ts = text_ts or published_ts
+    if evidence_ts is None:
+        return bool(archive_unknown)
+    return evidence_ts < cutoff
+
 def archive_stale_pending(max_age_days=45, archive_unknown=True) -> int:
     cutoff = int(time.time()) - int(max_age_days * 86400)
     with _conn() as c:
         rows = [dict(r) for r in c.execute(
-            "SELECT id, published FROM items WHERE status='pending'")]
+            "SELECT id, title, published, raw_summary FROM items WHERE status='pending'")]
         archive_ids = []
         for row in rows:
-            ts = _published_text_ts(row.get("published") or "")
-            if ts is None:
-                if archive_unknown:
-                    archive_ids.append(row["id"])
-            elif ts < cutoff:
+            if item_is_stale(row, max_age_days, archive_unknown):
                 archive_ids.append(row["id"])
         if archive_ids:
             c.executemany("UPDATE items SET status='archived' WHERE id=?",
