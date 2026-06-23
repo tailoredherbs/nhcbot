@@ -1,4 +1,4 @@
-import sqlite3, hashlib, json, os, time
+import re, sqlite3, hashlib, json, os, time
 
 from config import DB_PATH
 
@@ -43,6 +43,30 @@ def hash_url(url: str) -> str:
 def seen(url: str) -> bool:
     with _conn() as c:
         return c.execute("SELECT 1 FROM items WHERE url_hash=?", (hash_url(url),)).fetchone() is not None
+
+_STOPWORDS = {
+    "a", "an", "and", "at", "for", "from", "in", "into", "its", "new", "of",
+    "on", "the", "to", "under", "with", "by", "as", "is", "will", "opens",
+    "open", "opening", "launch", "launches", "adds", "sets", "targets",
+}
+
+def _title_tokens(title: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", (title or "").lower())
+            if len(t) > 2 and t not in _STOPWORDS}
+
+def _similarity(a: str, b: str) -> float:
+    ta, tb = _title_tokens(a), _title_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / max(1, min(len(ta), len(tb)))
+
+def seen_similar_title(title: str, max_age_days=45, threshold=0.40) -> bool:
+    cutoff = int(time.time()) - int(max_age_days * 86400)
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT title FROM items WHERE created_at>=? ORDER BY id DESC LIMIT 500",
+            (cutoff,)).fetchall()
+    return any(_similarity(title, r["title"]) >= threshold for r in rows)
 
 def add_item(source, title, url, published, raw_summary) -> int | None:
     try:
@@ -112,12 +136,47 @@ def counts():
         return {r["status"]: r["n"] for r in c.execute(
             "SELECT status, COUNT(*) n FROM items GROUP BY status")}
 
-def recent_by_status(status: str, limit=20):
+def recent_by_status(status: str, limit=20, source_query: str = ""):
     with _conn() as c:
+        if source_query:
+            return [dict(r) for r in c.execute(
+                """SELECT * FROM items
+                   WHERE status=? AND lower(source) LIKE ?
+                   ORDER BY created_at DESC, id DESC LIMIT ?""",
+                (status, f"%{source_query.lower()}%", limit))]
         return [dict(r) for r in c.execute(
             """SELECT * FROM items
                WHERE status=?
                ORDER BY created_at DESC, id DESC LIMIT ?""", (status, limit))]
+
+def recent_by_source(source_query: str, limit=20):
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT * FROM items
+               WHERE lower(source) LIKE ?
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (f"%{source_query.lower()}%", limit))]
+
+def dedupe_pending(threshold=0.40) -> int:
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT id, title, llm FROM items WHERE status='pending' ORDER BY id DESC")]
+        keep = []
+        archive_ids = []
+        for row in rows:
+            try:
+                llm = json.loads(row["llm"]) if row.get("llm") else {}
+            except Exception:
+                llm = {}
+            title = llm.get("title") or row["title"]
+            if any(_similarity(title, kept) >= threshold for kept in keep):
+                archive_ids.append(row["id"])
+            else:
+                keep.append(title)
+        if archive_ids:
+            c.executemany("UPDATE items SET status='archived' WHERE id=?",
+                          [(i,) for i in archive_ids])
+        return len(archive_ids)
 
 
 def record_source_health(source: str, url: str, ok: bool, entries: int,

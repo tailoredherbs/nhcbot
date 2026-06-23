@@ -329,23 +329,51 @@ async def cmd_resettest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     allowed = {"pending", "new", "archived", "rejected", "published", "skipped"}
-    status = (context.args[0].lower() if context.args else "").strip()
+    args = [a.lower().strip() for a in context.args]
+    source_filter = ""
+    if "grok" in args:
+        source_filter = "grok"
+        args = [a for a in args if a != "grok"]
+    status = (args[0] if args else "").strip()
+    source_only = bool(source_filter and not status)
     if not status:
+        if source_only:
+            items = store.recent_by_source(source_filter, 20)
+            if not items:
+                await update.message.reply_text("No Grok items found.")
+                return
+            await update.message.reply_text(f"📦 Latest {len(items)} Grok item(s), any status:")
+            for item in items:
+                try:
+                    llm = json.loads(item["llm"]) if item["llm"] else {}
+                except Exception:
+                    llm = {}
+                title = llm.get("title") or item["title"]
+                detail = llm.get("description") or llm.get("reason") or item.get("raw_summary") or ""
+                await update.message.reply_text(
+                    f"<b>#{item['id']} [{item['status']}] {title[:120]}</b>\n"
+                    f"<i>{item['source']}</i>\n{detail[:500]}\n{item['url']}",
+                    parse_mode="HTML", disable_web_page_preview=True)
+            return
         c = store.counts()
         summary = " · ".join(f"{k}: {v}" for k, v in sorted(c.items())) if c else "empty"
         await update.message.reply_text(
             "📦 Queue: " + summary + "\n"
-            "Use /queue pending, /queue archived, /queue rejected, or /queue new.")
+            "Use /queue pending, /queue archived, /queue rejected, /queue new, or /queue grok.")
         return
+    if status == "grok":
+        source_filter = "grok"
+        status = "pending"
     if status not in allowed:
         await update.message.reply_text(
-            "Use one of: /queue pending, /queue archived, /queue rejected, /queue new.")
+            "Use one of: /queue pending, /queue archived, /queue rejected, /queue new, /queue grok.")
         return
-    items = store.recent_by_status(status, 20)
+    items = store.recent_by_status(status, 20, source_filter)
     if not items:
-        await update.message.reply_text(f"No {status} items.")
+        await update.message.reply_text(f"No {source_filter + ' ' if source_filter else ''}{status} items.")
         return
-    await update.message.reply_text(f"📦 Latest {len(items)} {status} item(s):")
+    label = f"{source_filter} {status}".strip()
+    await update.message.reply_text(f"📦 Latest {len(items)} {label} item(s):")
     for item in items:
         try:
             llm = json.loads(item["llm"]) if item["llm"] else {}
@@ -362,6 +390,13 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>#{item['id']} {title[:120]}</b>\n"
             f"<i>{item['source']}</i>\n{detail[:500]}\n{item['url']}",
             parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+
+
+async def cmd_dedupepending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n = store.dedupe_pending()
+    await update.message.reply_text(
+        f"🧹 Archived {n} near-duplicate pending candidate(s). "
+        "Run /digest or /queue pending to review the cleaned queue.")
 
 
 URL_RE = __import__("re").compile(r"https?://\S+")
@@ -639,7 +674,8 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 /grok — slower deep scan across venue websites/social channels
 /digest — show pending signal candidates (also arrives daily at 08:00)
 /archive — recent older/skipped candidates that no longer clog the digest
-/queue — inspect pending/new/archive/rejected without changing anything
+/queue — inspect pending/new/archive/rejected; /queue grok filters Grok
+/dedupepending — archive near-duplicate pending candidates
 /clearpending — archive all current pending candidates to reset the digest queue
 /resettest — testing only: delete unpublished scanner memory, keep published
 /rejected — last 15 rejected items with reasons, ♻️ to override
@@ -773,6 +809,7 @@ def main():
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("archive", cmd_archive))
     app.add_handler(CommandHandler("queue", cmd_queue))
+    app.add_handler(CommandHandler("dedupepending", cmd_dedupepending))
     app.add_handler(CommandHandler("clearpending", cmd_clearpending))
     app.add_handler(CommandHandler("resettest", cmd_resettest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))

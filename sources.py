@@ -86,7 +86,7 @@ def _fetch_one(source: str, url: str, limit: int = 30,
             continue
         link = getattr(e, "link", "") or ""
         title = _clean(getattr(e, "title", ""), 300)
-        if not link or not title or store.seen(link):
+        if not link or not title or store.seen(link) or store.seen_similar_title(title):
             continue
         published = getattr(e, "published", "") or getattr(e, "updated", "")
         summary = _clean(getattr(e, "summary", "") or getattr(e, "description", ""))
@@ -254,7 +254,7 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                 url = _plain(cand.get("url"))
                 if not title or not url:
                     continue
-                if store.seen(url):
+                if store.seen(url) or store.seen_similar_title(title):
                     duplicates += 1
                     continue
                 venue = _plain(cand.get("venue"))
