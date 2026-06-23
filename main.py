@@ -9,7 +9,7 @@ import store, sources, filter_llm, publisher, socials, reports_gen, capture, rad
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TZ, DIGEST_HOUR,
                     FETCH_EVERY_HOURS, MAX_ITEMS_PER_DIGEST,
                     ENABLE_GROK_CHANNEL_SCAN, GROK_MODEL, XAI_API_KEY,
-                    PENDING_ARCHIVE_DAYS)
+                    PENDING_ARCHIVE_DAYS, SIGNAL_MAX_AGE_DAYS)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -98,15 +98,22 @@ def _card_kb(item_id):
 
 
 async def job_digest(context: ContextTypes.DEFAULT_TYPE):
+    stale = store.archive_stale_pending(SIGNAL_MAX_AGE_DAYS)
     archived = store.archive_old_pending(PENDING_ARCHIVE_DAYS)
     pending = store.pending_fresh(MAX_ITEMS_PER_DIGEST, PENDING_ARCHIVE_DAYS)
     if not pending:
         msg = "📭 No fresh signals today."
+        if stale:
+            msg += f" Archived {stale} stale/undated candidate(s)."
         if archived:
             msg += f" Archived {archived} older candidate(s)."
         await context.bot.send_message(TELEGRAM_CHAT_ID, msg)
         return
-    suffix = f" · archived {archived} old" if archived else ""
+    suffix = ""
+    if stale:
+        suffix += f" · archived {stale} stale/undated"
+    if archived:
+        suffix += f" · archived {archived} old"
     await context.bot.send_message(TELEGRAM_CHAT_ID,
         f"📡 <b>NHC Daily Digest</b> — {len(pending)} fresh candidate signal(s){suffix}",
         parse_mode="HTML")
@@ -413,12 +420,20 @@ async def cmd_regrokfilter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"retrying {stats['failed']}.")
 
 
+async def cmd_datecleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n = store.archive_stale_pending(SIGNAL_MAX_AGE_DAYS)
+    await update.message.reply_text(
+        f"🗓 Archived {n} pending candidate(s) with old or unknown evidence dates "
+        f"(cutoff: {SIGNAL_MAX_AGE_DAYS} days).")
+
+
 async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🌅 Morning scan started: feeds → Grok scout → stricter Grok filter → dedupe → digest.")
     feed = await job_fetch_and_filter(context)
     grok = await _run_grok_scan()
     refilter = await _run_grok_refilter()
+    stale = store.archive_stale_pending(SIGNAL_MAX_AGE_DAYS)
     deduped = store.dedupe_pending()
     c = store.counts()
     await update.message.reply_text(
@@ -428,7 +443,8 @@ async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Grok: found {grok['new']}, accepted {grok['accepted']}, "
         f"rejected {grok['rejected']}, retrying {grok['failed']}\n"
         f"Grok re-filter: accepted {refilter['accepted']}, rejected {refilter['rejected']}\n"
-        f"Deduped: {deduped} archived · Pending now: {c.get('pending', 0)}")
+        f"Date cleanup: {stale} archived · Deduped: {deduped} archived · "
+        f"Pending now: {c.get('pending', 0)}")
     await job_digest(context)
 
 
@@ -791,6 +807,7 @@ After publishing: 📣 Social pack — card image + Instagram/LinkedIn captions
 /grok — Grok scan only
 /dedupepending — archive near-duplicates
 /regrokfilter — re-filter pending Grok items
+/datecleanup — archive pending items with old/unknown evidence dates
 /archive — recent archived candidates
 /clearpending — archive all pending candidates
 /resettest — testing only: delete unpublished scanner memory, keep published
@@ -904,6 +921,7 @@ def main():
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("dedupepending", cmd_dedupepending))
     app.add_handler(CommandHandler("regrokfilter", cmd_regrokfilter))
+    app.add_handler(CommandHandler("datecleanup", cmd_datecleanup))
     app.add_handler(CommandHandler("clearpending", cmd_clearpending))
     app.add_handler(CommandHandler("resettest", cmd_resettest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))

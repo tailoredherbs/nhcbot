@@ -1,4 +1,4 @@
-import re, sqlite3, hashlib, json, os, time
+import datetime, email.utils, re, sqlite3, hashlib, json, os, time
 
 from config import DB_PATH
 
@@ -124,6 +124,39 @@ def archive_all_pending() -> int:
     with _conn() as c:
         cur = c.execute("UPDATE items SET status='archived' WHERE status='pending'")
         return cur.rowcount
+
+def _published_text_ts(raw: str) -> int | None:
+    raw = (raw or "").strip()
+    if not raw or raw.lower() in {"unknown", "n/a", "none", "recent"}:
+        return None
+    try:
+        return int(email.utils.parsedate_to_datetime(raw).timestamp())
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return int(datetime.datetime.strptime(raw, fmt).replace(tzinfo=datetime.timezone.utc).timestamp())
+        except Exception:
+            pass
+    return None
+
+def archive_stale_pending(max_age_days=45, archive_unknown=True) -> int:
+    cutoff = int(time.time()) - int(max_age_days * 86400)
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT id, published FROM items WHERE status='pending'")]
+        archive_ids = []
+        for row in rows:
+            ts = _published_text_ts(row.get("published") or "")
+            if ts is None:
+                if archive_unknown:
+                    archive_ids.append(row["id"])
+            elif ts < cutoff:
+                archive_ids.append(row["id"])
+        if archive_ids:
+            c.executemany("UPDATE items SET status='archived' WHERE id=?",
+                          [(i,) for i in archive_ids])
+        return len(archive_ids)
 
 def reset_unpublished_items() -> int:
     """Clear scanner memory for testing while preserving published signals."""

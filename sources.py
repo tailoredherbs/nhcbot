@@ -1,5 +1,5 @@
 """Fetch publication feeds, news mentions, and venue-owned channel updates."""
-import calendar, email.utils, json, logging, re, time
+import calendar, datetime, email.utils, json, logging, re, time
 from urllib.parse import quote_plus
 import feedparser
 import requests
@@ -62,11 +62,28 @@ def _published_ts(entry) -> int | None:
     return None
 
 
+def _published_text_ts(raw: str) -> int | None:
+    raw = _plain(raw)
+    if not raw or raw.lower() in {"unknown", "n/a", "none", "recent"}:
+        return None
+    try:
+        return int(email.utils.parsedate_to_datetime(raw).timestamp())
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d %b %Y", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return int(datetime.datetime.strptime(raw, fmt).replace(tzinfo=datetime.timezone.utc).timestamp())
+        except Exception:
+            pass
+    return None
+
+
 def _is_recent(entry, max_age_days: int = SIGNAL_MAX_AGE_DAYS) -> bool:
     ts = _published_ts(entry)
     if not ts:
-        # If a feed gives no date, keep it; the LLM/editor can still judge it.
-        return True
+        # Signals are publishable news; undated items belong in manual/intel review,
+        # not the digest queue.
+        return False
     return ts >= int(time.time()) - int(max_age_days * 86400)
 
 
@@ -105,8 +122,12 @@ def _fetch_one(source: str, url: str, limit: int = 30,
         raise RuntimeError("response contained no RSS/Atom entries")
     new_ids = []
     old = 0
+    undated = 0
     noise = 0
     for e in feed.entries[:limit]:
+        if _published_ts(e) is None:
+            undated += 1
+            continue
         if not _is_recent(e):
             old += 1
             continue
@@ -122,7 +143,7 @@ def _fetch_one(source: str, url: str, limit: int = 30,
         item_id = store.add_item(source, title, link, published, summary)
         if item_id:
             new_ids.append(item_id)
-    return new_ids, len(feed.entries), old, noise
+    return new_ids, len(feed.entries), old + undated, noise
 
 
 def _fetch_publications() -> list[int]:
@@ -233,7 +254,7 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                                    "no website/instagram links exposed")
         return []
 
-    new_ids, found, duplicates, parse_empty, failures = [], 0, 0, 0, []
+    new_ids, found, duplicates, stale, parse_empty, failures = [], 0, 0, 0, 0, []
     for start in range(0, len(channels), batch_size):
         batch = channels[start:start + batch_size]
         prompt = (
@@ -247,9 +268,9 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
             "partnerships, closures, leadership/medical-director moves, acquisitions, "
             "or pricing/model changes. Avoid generic evergreen service pages, product "
             "supplier news, job posts, and trend articles.\n\n"
-            f"Prefer evidence from the last {SIGNAL_MAX_AGE_DAYS} days, but include a "
-            "lead with published='unknown' if the source is an official announcement, "
-            "booking page, Instagram post, or credible article that looks current. "
+            f"Only include leads with evidence published in the last {SIGNAL_MAX_AGE_DAYS} days. "
+            "The published field must be a real evidence date, not 'unknown'. "
+            "A future opening date is not enough; the announcement/article/post date must be recent. "
             "Do not invent dates. Return only a JSON array. Each item must have: "
             "title, url, published, summary, venue, confidence. confidence is high, "
             "medium, or low. If nothing at all is found after searching, return [].\n\n"
@@ -292,6 +313,11 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                 url = _plain(cand.get("url"))
                 if not title or not url:
                     continue
+                published = _plain(cand.get("published"))
+                ts = _published_text_ts(published)
+                if ts is None or ts < int(time.time()) - int(SIGNAL_MAX_AGE_DAYS * 86400):
+                    stale += 1
+                    continue
                 if store.seen(url) or store.seen_similar_title(title):
                     duplicates += 1
                     continue
@@ -302,7 +328,7 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                         venue, confidence or "unknown", cand.get("summary") or ""),
                     1600,
                 )
-                item_id = store.add_item(source, title, url, _plain(cand.get("published")), summary)
+                item_id = store.add_item(source, title, url, published, summary)
                 if item_id:
                     new_ids.append(item_id)
             found += len(candidates or [])
@@ -311,7 +337,7 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
 
     ok = not failures
     detail = (f"scanned {len(channels)} venues; candidates {found}; "
-              f"duplicates {duplicates}; empty {parse_empty}")
+              f"duplicates {duplicates}; stale/undated {stale}; empty {parse_empty}")
     if failures:
         detail += f"; {len(failures)} failed: {failures[0]}"
     store.record_source_health(source, "xAI web_search over venue websites/Instagram",
