@@ -173,7 +173,7 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                                    "no website/instagram links exposed")
         return []
 
-    new_ids, found, failures = [], 0, []
+    new_ids, found, duplicates, parse_empty, failures = [], 0, 0, 0, []
     for start in range(0, len(channels), batch_size):
         batch = channels[start:start + batch_size]
         prompt = (
@@ -210,13 +210,19 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                         if content.get("type") in ("output_text", "text"):
                             parts.append(content.get("text", ""))
                 text = "\n".join(parts)
+            if not text.strip():
+                parse_empty += 1
+                continue
             candidates = _json_from_text(text)
             if isinstance(candidates, dict):
                 candidates = candidates.get("items", [])
             for cand in candidates or []:
                 title = _clean(cand.get("title"), 300)
                 url = _plain(cand.get("url"))
-                if not title or not url or store.seen(url):
+                if not title or not url:
+                    continue
+                if store.seen(url):
+                    duplicates += 1
                     continue
                 venue = _plain(cand.get("venue"))
                 summary = _clean(
@@ -231,7 +237,10 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
             failures.append(str(ex))
 
     ok = not failures
-    detail = "ok" if ok else f"{len(failures)} batch(es) failed: {failures[0]}"
+    detail = (f"scanned {len(channels)} venues; candidates {found}; "
+              f"duplicates {duplicates}; empty {parse_empty}")
+    if failures:
+        detail += f"; {len(failures)} failed: {failures[0]}"
     store.record_source_health(source, "xAI web_search over venue websites/Instagram",
                                ok, found, len(new_ids), detail)
     log.info("Grok venue channel scan: %d venues, %d candidates, %d new, %d failed batches",

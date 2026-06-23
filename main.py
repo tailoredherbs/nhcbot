@@ -386,10 +386,13 @@ async def cmd_grok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_ids = await asyncio.to_thread(sources.fetch_grok_channels)
     processed, accepted, failed = await _classify_new_items(100)
     c = store.counts()
+    health = next((r for r in store.source_health()
+                   if r["source"] == "Grok venue channel scan"), None)
+    detail = f"\n{health['detail']}" if health and health.get("detail") else ""
     await update.message.reply_text(
         f"Done. Grok found {len(new_ids)} new item(s). "
         f"Processed {processed - failed}; accepted {accepted}; retrying {failed}. "
-        f"Pending: {c.get('pending', 0)}")
+        f"Pending: {c.get('pending', 0)}{detail}")
 
 
 async def cmd_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE):
