@@ -112,6 +112,13 @@ def counts():
         return {r["status"]: r["n"] for r in c.execute(
             "SELECT status, COUNT(*) n FROM items GROUP BY status")}
 
+def recent_by_status(status: str, limit=20):
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT * FROM items
+               WHERE status=?
+               ORDER BY created_at DESC, id DESC LIMIT ?""", (status, limit))]
+
 
 def record_source_health(source: str, url: str, ok: bool, entries: int,
                          new_items: int, detail: str = ""):
