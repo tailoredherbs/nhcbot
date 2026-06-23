@@ -101,6 +101,12 @@ def archive_all_pending() -> int:
         cur = c.execute("UPDATE items SET status='archived' WHERE status='pending'")
         return cur.rowcount
 
+def reset_unpublished_items() -> int:
+    """Clear scanner memory for testing while preserving published signals."""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM items WHERE status!='published'")
+        return cur.rowcount
+
 def counts():
     with _conn() as c:
         return {r["status"]: r["n"] for r in c.execute(

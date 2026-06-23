@@ -320,6 +320,13 @@ async def cmd_clearpending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗄 Archived {n} pending candidate(s). New fetches will start with a clean digest queue.")
 
 
+async def cmd_resettest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    n = store.reset_unpublished_items()
+    await update.message.reply_text(
+        f"🧪 Reset test memory: removed {n} unpublished scanner item(s). "
+        "Published items were kept. Now run /fetch to test discovery fresh.")
+
+
 URL_RE = __import__("re").compile(r"https?://\S+")
 
 
@@ -596,6 +603,7 @@ HELP_TEXT = """<b>NHC Pipeline — commands</b>
 /digest — show pending signal candidates (also arrives daily at 08:00)
 /archive — recent older/skipped candidates that no longer clog the digest
 /clearpending — archive all current pending candidates to reset the digest queue
+/resettest — testing only: delete unpublished scanner memory, keep published
 /rejected — last 15 rejected items with reasons, ♻️ to override
 /signal &lt;paste&gt; — suggest something yourself: a URL, a copied radar entry, or
 any text → becomes a pending signal card with the normal flow
@@ -727,6 +735,7 @@ def main():
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("archive", cmd_archive))
     app.add_handler(CommandHandler("clearpending", cmd_clearpending))
+    app.add_handler(CommandHandler("resettest", cmd_resettest))
     app.add_handler(CommandHandler("fetch", cmd_fetch))
     app.add_handler(CommandHandler("grok", cmd_grok))
     app.add_handler(CommandHandler("stats", cmd_stats))
