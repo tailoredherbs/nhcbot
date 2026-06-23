@@ -405,12 +405,67 @@ async def cmd_dedupepending(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_regrokfilter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    n = store.requeue_pending_source("grok")
-    processed, accepted, rejected, failed = await _classify_new_items(100)
+    stats = await _run_grok_refilter()
     await update.message.reply_text(
         f"🧪 Re-filtered Grok pending items with stricter Signal rules. "
-        f"Requeued {n}; processed {processed - failed}; accepted {accepted}; "
-        f"rejected {rejected}; retrying {failed}.")
+        f"Requeued {stats['requeued']}; processed {stats['processed']}; "
+        f"accepted {stats['accepted']}; rejected {stats['rejected']}; "
+        f"retrying {stats['failed']}.")
+
+
+async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🌅 Morning scan started: feeds → Grok scout → stricter Grok filter → dedupe → digest.")
+    feed = await job_fetch_and_filter(context)
+    grok = await _run_grok_scan()
+    refilter = await _run_grok_refilter()
+    deduped = store.dedupe_pending()
+    c = store.counts()
+    await update.message.reply_text(
+        "🌅 Scan summary\n"
+        f"Feeds: found {feed['discovered']}, accepted {feed['accepted']}, "
+        f"rejected {feed['rejected']}, retrying {feed['failed']}\n"
+        f"Grok: found {grok['new']}, accepted {grok['accepted']}, "
+        f"rejected {grok['rejected']}, retrying {grok['failed']}\n"
+        f"Grok re-filter: accepted {refilter['accepted']}, rejected {refilter['rejected']}\n"
+        f"Deduped: {deduped} archived · Pending now: {c.get('pending', 0)}")
+    await job_digest(context)
+
+
+async def cmd_intel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = store.counts()
+    await update.message.reply_text(
+        "🧭 Intel view\n"
+        f"Queue: " + (" · ".join(f"{k}: {v}" for k, v in sorted(c.items())) if c else "empty") +
+        "\nShowing latest Grok leads. Run /radar for private science/regulatory intelligence.")
+    items = store.recent_by_source("grok", 10)
+    if not items:
+        await update.message.reply_text("No Grok leads stored yet. Run /grok first.")
+    else:
+        for item in items:
+            try:
+                llm = json.loads(item["llm"]) if item["llm"] else {}
+            except Exception:
+                llm = {}
+            title = llm.get("title") or item["title"]
+            detail = llm.get("description") or llm.get("reason") or item.get("raw_summary") or ""
+            kb = None
+            if item["status"] == "pending":
+                kb = _card_kb(item["id"])
+            elif item["status"] in {"archived", "rejected"}:
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("♻️ Restore", callback_data=f"rescue:{item['id']}")]])
+            await update.message.reply_text(
+                f"<b>#{item['id']} [{item['status']}] {title[:120]}</b>\n"
+                f"<i>{item['source']}</i>\n{detail[:500]}\n{item['url']}",
+                parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+    await context.bot.send_message(
+        update.message.chat_id,
+        "More views: /queue pending · /queue rejected · /queue grok · /radar")
+
+
+async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_stats(update, context)
+    await cmd_health(update, context)
 
 
 URL_RE = __import__("re").compile(r"https?://\S+")
@@ -470,6 +525,35 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _draft_signal_from("manual", title, url, notes,
                              update.message.chat_id, context)
 
+
+async def _run_grok_scan() -> dict:
+    import asyncio
+    new_ids = await asyncio.to_thread(sources.fetch_grok_channels)
+    processed, accepted, rejected, failed = await _classify_new_items(100)
+    health = next((r for r in store.source_health()
+                   if r["source"] == "Grok venue channel scan"), None)
+    return {
+        "new": len(new_ids),
+        "processed": processed - failed,
+        "accepted": accepted,
+        "rejected": rejected,
+        "failed": failed,
+        "detail": health.get("detail", "") if health else "",
+    }
+
+
+async def _run_grok_refilter() -> dict:
+    n = store.requeue_pending_source("grok")
+    processed, accepted, rejected, failed = await _classify_new_items(100)
+    return {
+        "requeued": n,
+        "processed": processed - failed,
+        "accepted": accepted,
+        "rejected": rejected,
+        "failed": failed,
+    }
+
+
 async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Fetching feeds…")
     stats = await job_fetch_and_filter(context)
@@ -482,19 +566,15 @@ async def cmd_fetch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_grok(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import asyncio
     await update.message.reply_text(
         "🛰 Running the slower Grok venue-channel scan… this can take several minutes.")
-    new_ids = await asyncio.to_thread(sources.fetch_grok_channels)
-    processed, accepted, rejected, failed = await _classify_new_items(100)
+    stats = await _run_grok_scan()
     c = store.counts()
-    health = next((r for r in store.source_health()
-                   if r["source"] == "Grok venue channel scan"), None)
-    detail = f"\n{health['detail']}" if health and health.get("detail") else ""
+    detail = f"\n{stats['detail']}" if stats.get("detail") else ""
     await update.message.reply_text(
-        f"Done. Grok found {len(new_ids)} new item(s). "
-        f"Processed {processed - failed}; accepted {accepted}; "
-        f"rejected {rejected}; retrying {failed}. "
+        f"Done. Grok found {stats['new']} new item(s). "
+        f"Processed {stats['processed']}; accepted {stats['accepted']}; "
+        f"rejected {stats['rejected']}; retrying {stats['failed']}. "
         f"Pending: {c.get('pending', 0)}{detail}")
 
 
@@ -681,46 +761,41 @@ async def cmd_compile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML", reply_markup=_insight_kb(iid))
 
 
-HELP_TEXT = """<b>NHC Pipeline — commands</b>
+HELP_TEXT = """<b>NHC Pipeline — simple mode</b>
 
-<b>News flow</b>
-/fetch — pull the trade feeds now (also runs automatically every 6h)
-/grok — slower deep scan across venue websites/social channels
-/digest — show pending signal candidates (also arrives daily at 08:00)
-/archive — recent older/skipped candidates that no longer clog the digest
-/queue — inspect pending/new/archive/rejected; /queue grok filters Grok
-/dedupepending — archive near-duplicate pending candidates
-/regrokfilter — re-run pending Grok items through stricter Signal filter
-/clearpending — archive all current pending candidates to reset the digest queue
-/resettest — testing only: delete unpublished scanner memory, keep published
-/rejected — last 15 rejected items with reasons, ♻️ to override
-/signal &lt;paste&gt; — suggest something yourself: a URL, a copied radar entry, or
-any text → becomes a pending signal card with the normal flow
-/stats — counts by status
-/health — show which publication and venue-news sources are working
+<b>Daily</b>
+/morning — run the full Signals routine: feeds + Grok + cleanup + digest
+/digest — show publishable candidates with buttons
+/intel — wider awareness view: Grok leads + queue pointers
+
+<b>Private radar</b>
+/radar — science/regulation/safety intelligence, never auto-published
+
+<b>Manual inputs</b>
+/signal &lt;paste&gt; — turn a URL/text/radar item into a Signal candidate
+Send a voice note or long text — capture an idea/post seed
 
 <b>Publishing</b>
-On each signal card: ✅ Publish (commits to the site) · ✏️ Edit (reply with an
-instruction, or TEXT: to replace the body) · ❌ Skip
-After publishing: 📣 Social pack — card image + Instagram and LinkedIn captions
+On each Signal card: ✅ Publish · ✏️ Edit · ❌ Archive
+After publishing: 📣 Social pack — card image + Instagram/LinkedIn captions
 
-<b>Reports</b>
-/report — synthesize signals since the last report into a Market Report draft
-/report 180 — same, with a 180-day window
+<b>Secondary views</b>
+/queue pending — all pending candidates
+/queue grok — Grok leads across statuses
+/queue rejected — rejected items worth reviewing
+/report — draft a market report from published Signals
 
-<b>Radar (private — never published)</b>
-/radar — scan science/regulatory feeds now; weekly digest arrives Sundays 09:00
-Each radar item carries a ➕ button — tap it to promote the item into a
-signal candidate (drafted, then the usual Publish / Edit / Skip)
-Covers: longevity trials, therapy evidence shifts, psychedelic medicine access,
-diagnostics, regulatory moves
+<b>Maintenance / debugging</b>
+/debug — status + source health
+/fetch — feed scan only
+/grok — Grok scan only
+/dedupepending — archive near-duplicates
+/regrokfilter — re-filter pending Grok items
+/archive — recent archived candidates
+/clearpending — archive all pending candidates
+/resettest — testing only: delete unpublished scanner memory, keep published
 
-<b>Thinking capture</b>
-Send a voice note, paste a long text, or /capture &lt;text&gt; — becomes either one
-LinkedIn-ready post (reports voice) or a 🌱 seed if too thin
-/ideas — your saved insight bank (posts and seeds)
-/compile — cluster the saved seeds into posts once enough material has accumulated
-
+/ideas — saved insight bank · /compile — turn seeds into posts
 /help — this message"""
 
 
@@ -821,6 +896,9 @@ def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_error_handler(on_error)
     app.add_handler(CallbackQueryHandler(on_button))
+    app.add_handler(CommandHandler("morning", cmd_morning))
+    app.add_handler(CommandHandler("intel", cmd_intel))
+    app.add_handler(CommandHandler("debug", cmd_debug))
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("archive", cmd_archive))
     app.add_handler(CommandHandler("queue", cmd_queue))
