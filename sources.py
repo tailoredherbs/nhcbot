@@ -70,8 +70,33 @@ def _is_recent(entry, max_age_days: int = SIGNAL_MAX_AGE_DAYS) -> bool:
     return ts >= int(time.time()) - int(max_age_days * 86400)
 
 
+def _is_obvious_nonvenue_noise(title: str, summary: str = "") -> bool:
+    text = f"{title} {summary}".lower()
+    noisy_phrases = (
+        "job vacancy",
+        "apprentice",
+        "press release",
+        "how to specify",
+        "lighting design",
+        "introduces",
+        "equipment supplier",
+        "fitness equipment",
+        "spa equipment",
+        "dry flotation bed",
+        "trade show",
+        "elevate 2026 partnership",
+    )
+    if any(p in text for p in noisy_phrases):
+        positive = (
+            "opens", "opening", "launches", "expands", "acquires", "resort",
+            "retreat", "club", "clinic", "destination", "reservations",
+        )
+        return not any(p in text for p in positive)
+    return False
+
+
 def _fetch_one(source: str, url: str, limit: int = 30,
-               allow_empty: bool = False) -> tuple[list[int], int, int]:
+               allow_empty: bool = False) -> tuple[list[int], int, int, int]:
     """Fetch one RSS/Atom URL, insert unseen recent entries, and return ids + counts."""
     resp = requests.get(url, headers=UA, timeout=30)
     resp.raise_for_status()
@@ -80,6 +105,7 @@ def _fetch_one(source: str, url: str, limit: int = 30,
         raise RuntimeError("response contained no RSS/Atom entries")
     new_ids = []
     old = 0
+    noise = 0
     for e in feed.entries[:limit]:
         if not _is_recent(e):
             old += 1
@@ -90,10 +116,13 @@ def _fetch_one(source: str, url: str, limit: int = 30,
             continue
         published = getattr(e, "published", "") or getattr(e, "updated", "")
         summary = _clean(getattr(e, "summary", "") or getattr(e, "description", ""))
+        if _is_obvious_nonvenue_noise(title, summary):
+            noise += 1
+            continue
         item_id = store.add_item(source, title, link, published, summary)
         if item_id:
             new_ids.append(item_id)
-    return new_ids, len(feed.entries), old
+    return new_ids, len(feed.entries), old, noise
 
 
 def _fetch_publications() -> list[int]:
@@ -101,12 +130,13 @@ def _fetch_publications() -> list[int]:
     for source, url in FEEDS.items():
         try:
             is_news_search = "news.google.com/rss/search" in url
-            ids, entries, old = _fetch_one(source, url, limit=15 if is_news_search else 30,
-                                           allow_empty=is_news_search)
+            ids, entries, old, noise = _fetch_one(source, url, limit=15 if is_news_search else 30,
+                                                  allow_empty=is_news_search)
             new_ids.extend(ids)
-            detail = f"ok; skipped {old} older than {SIGNAL_MAX_AGE_DAYS}d"
+            detail = f"ok; skipped {old} older than {SIGNAL_MAX_AGE_DAYS}d; {noise} obvious noise"
             store.record_source_health(source, url, True, entries, len(ids), detail)
-            log.info("%s: ok (%d entries, %d new, %d old)", source, entries, len(ids), old)
+            log.info("%s: ok (%d entries, %d new, %d old, %d noise)",
+                     source, entries, len(ids), old, noise)
         except Exception as ex:
             store.record_source_health(source, url, False, 0, 0, str(ex))
             log.error("Feed failed %s: %s", source, ex)
@@ -149,7 +179,7 @@ def _fetch_index_news(batch_size: int = 8) -> list[int]:
         log.error("Could not load index venues for news watch: %s", ex)
         return []
 
-    new_ids, total_entries, old_entries, failures = [], 0, 0, []
+    new_ids, total_entries, old_entries, noise_entries, failures = [], 0, 0, 0, []
     change_terms = '(opening OR opens OR launch OR expansion OR partnership OR membership OR program OR retreat OR acquisition)'
     for start in range(0, len(names), batch_size):
         batch = names[start:start + batch_size]
@@ -158,20 +188,21 @@ def _fetch_index_news(batch_size: int = 8) -> list[int]:
         url = ("https://news.google.com/rss/search?q=" + quote_plus(query)
                + "&hl=en-US&gl=US&ceid=US:en")
         try:
-            ids, entries, old = _fetch_one("Index venue news", url, limit=8, allow_empty=True)
+            ids, entries, old, noise = _fetch_one("Index venue news", url, limit=8, allow_empty=True)
             new_ids.extend(ids)
             total_entries += entries
             old_entries += old
+            noise_entries += noise
         except Exception as ex:
             failures.append(str(ex))
     ok = not failures
-    detail = f"skipped {old_entries} older than {SIGNAL_MAX_AGE_DAYS}d"
+    detail = f"skipped {old_entries} older than {SIGNAL_MAX_AGE_DAYS}d; {noise_entries} obvious noise"
     if failures:
         detail += f"; {len(failures)} batch(es) failed: {failures[0]}"
     store.record_source_health("Index venue news", f"{SITE_URL}/spaces-data.json",
                                ok, total_entries, len(new_ids), detail)
-    log.info("Index venue news: %d venues, %d results, %d new, %d old, %d failed batches",
-             len(names), total_entries, len(new_ids), old_entries, len(failures))
+    log.info("Index venue news: %d venues, %d results, %d new, %d old, %d noise, %d failed batches",
+             len(names), total_entries, len(new_ids), old_entries, noise_entries, len(failures))
     return new_ids
 
 
