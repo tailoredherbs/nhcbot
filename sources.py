@@ -237,18 +237,23 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
     for start in range(0, len(channels), batch_size):
         batch = channels[start:start + batch_size]
         prompt = (
-            "You are scanning official venue-owned channels for The New Health Club.\n"
-            f"Look for public updates published in the last {SIGNAL_MAX_AGE_DAYS} days "
-            "that would change the venue map: "
-            "openings, expansions, new programs, memberships, partnerships, closures, "
-            "leadership/medical-director moves, acquisitions, or pricing/model changes.\n"
-            "Use only public evidence from the listed website or Instagram pages. If an "
-            "Instagram page cannot be accessed, do not guess. Do not include evergreen "
-            "service pages unless they explicitly show a recent announcement date. "
-            "A future opening date is not enough on its own; the announcement/reservation "
-            "evidence must be recent. Return only a JSON array. Each item must have: "
-            "title, url, published, summary, venue. If there are no clear signal-worthy "
-            "recent updates, return [].\n\nVENUES:\n"
+            "You are a discovery scout for The New Health Club Signals feed.\n"
+            "Use web search for this batch. Search the venue names, websites, and "
+            "Instagram handles below for recent or newly surfaced updates. Prioritize "
+            "official venue websites and Instagram pages, but credible public sources "
+            "are acceptable when official pages are blocked or undated.\n\n"
+            "Return candidate leads that might change the map: openings, reservations "
+            "opening, expansions, new locations, new retreats/programs, memberships, "
+            "partnerships, closures, leadership/medical-director moves, acquisitions, "
+            "or pricing/model changes. Avoid generic evergreen service pages, product "
+            "supplier news, job posts, and trend articles.\n\n"
+            f"Prefer evidence from the last {SIGNAL_MAX_AGE_DAYS} days, but include a "
+            "lead with published='unknown' if the source is an official announcement, "
+            "booking page, Instagram post, or credible article that looks current. "
+            "Do not invent dates. Return only a JSON array. Each item must have: "
+            "title, url, published, summary, venue, confidence. confidence is high, "
+            "medium, or low. If nothing at all is found after searching, return [].\n\n"
+            "VENUES:\n"
             + json.dumps(batch, ensure_ascii=False)
         )
         try:
@@ -260,6 +265,8 @@ def _fetch_grok_channel_scan(batch_size: int = GROK_CHANNEL_BATCH_SIZE) -> list[
                     "model": GROK_MODEL,
                     "input": [{"role": "user", "content": prompt}],
                     "tools": [{"type": "web_search", "enable_image_understanding": True}],
+                    "tool_choice": "required",
+                    "max_tool_calls": 8,
                 },
                 timeout=120,
             )
